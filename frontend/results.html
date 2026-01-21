@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Final Results - Debug Marathon</title>
+
+    <!-- CSS -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="css/main.css">
+
+    <style>
+        :root {
+            --bg-body: #f8fafc;
+            --text-main: #0f172a;
+        }
+
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            min-height: 100vh;
+        }
+
+        .results-header {
+            padding: 3rem 0;
+            text-align: center;
+            background: white;
+            border-bottom: 1px solid var(--gray-200);
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+        }
+
+        .lb-title {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--primary-600);
+            letter-spacing: -0.025em;
+            margin-bottom: 0.5rem;
+        }
+
+        .result-table th {
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 2px solid var(--gray-200);
+            background: #f9fafb;
+        }
+
+        .result-table td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--gray-100);
+            vertical-align: middle;
+            background: white;
+        }
+
+        .result-table tr:hover td {
+            background-color: var(--bg-secondary);
+        }
+
+        .empty-state {
+            padding: 4rem 2rem;
+            text-align: center;
+            color: var(--text-secondary);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+            background: white;
+        }
+
+        .level-select-wrapper {
+            margin-top: 1.5rem;
+            display: inline-flex;
+            align-items: center;
+            background: white;
+            border: 1px solid var(--gray-200);
+            border-radius: 0.5rem;
+            padding: 0.25rem 0.75rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .level-select {
+            border: none;
+            outline: none;
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--text-main);
+            padding: 0.5rem;
+            background: transparent;
+            cursor: pointer;
+            min-width: 150px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header class="results-header">
+        <div class="container">
+            <div class="lb-title">Official Results</div>
+            <div style="opacity: 0.8; font-size: 1.1rem; color: var(--text-secondary);">
+                Debug Marathon 2025-26
+            </div>
+
+            <div class="level-select-wrapper">
+                <i class="fa-solid fa-list-ol" style="color: var(--text-secondary); margin-right: 0.5rem;"></i>
+                <select id="level-select" class="level-select">
+                    <option value="" disabled selected>Loading levels...</option>
+                </select>
+            </div>
+        </div>
+    </header>
+
+    <div class="container" style="margin-top: 2rem;">
+        <div
+            style="border-radius: 1rem; overflow: hidden; box-shadow: var(--shadow-lg); border: 1px solid var(--gray-200);">
+            <div class="lb-table-container">
+                <table class="lb-table result-table" style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr>
+                            <th style="width: 60px;">Rank</th>
+                            <th>Participant</th>
+                            <th>Department</th>
+                            <th>College</th>
+                            <th style="text-align: right;">Score</th>
+                            <th style="text-align: right;">Time Taken</th>
+                            <th style="text-align: center;">Solved</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-body">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+
+                <div id="loading-state" class="empty-state" style="display: none;">
+                    <i class="fa-solid fa-spinner fa-spin fa-2x" style="color: var(--primary);"></i>
+                    <p>Loading results...</p>
+                </div>
+
+                <div id="empty-state" class="empty-state" style="display: none;">
+                    <i class="fa-solid fa-clipboard-list fa-3x" style="color: var(--gray-300);"></i>
+                    <p>No finalized results found for this level.</p>
+                </div>
+            </div>
+        </div>
+
+        <div style="text-align: center; margin-top: 2rem;">
+            <a href="index.html" class="btn btn-secondary" style="font-size: 0.9rem;">
+                <i class="fa-solid fa-arrow-left"></i> Back to Home
+            </a>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer" style="background: transparent; border-top: none; margin-top: 2rem;">
+        <div class="container" style="text-align: center; color: var(--gray-400);">
+            &copy; 2025 Debug Marathon Results
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script>
+        const API_BASE = '/api';
+
+        const Results = {
+            async init() {
+                const select = document.getElementById('level-select');
+                select.addEventListener('change', (e) => this.loadResults(e.target.value));
+
+                await this.loadLevels();
+            },
+
+            async loadLevels() {
+                const select = document.getElementById('level-select');
+                try {
+                    const res = await fetch(`${API_BASE}/rankings/levels`);
+                    const data = await res.json();
+
+                    select.innerHTML = '';
+
+                    if (data.levels && data.levels.length > 0) {
+                        data.levels.forEach((lvl, idx) => {
+                            const opt = document.createElement('option');
+                            opt.value = lvl.level;
+                            opt.textContent = lvl.title;
+                            select.appendChild(opt);
+                        });
+
+                        // Select first timestamp or stored pref? Let's select first.
+                        select.value = data.levels[0].level;
+                        this.loadResults(data.levels[0].level);
+                    } else {
+                        // No finalized levels yet
+                        const opt = document.createElement('option');
+                        opt.textContent = "No Data Available";
+                        select.appendChild(opt);
+                        select.disabled = true;
+                        this.showEmpty("No finalized results released yet.");
+                    }
+
+                } catch (e) {
+                    console.error("Levels error", e);
+                    select.innerHTML = '<option>Error loading levels</option>';
+                    this.showEmpty("Failed to load levels.");
+                }
+            },
+
+            async loadResults(level) {
+                if (!level) return;
+
+                const tbody = document.getElementById('results-body');
+                const loading = document.getElementById('loading-state');
+                const empty = document.getElementById('empty-state');
+
+                tbody.innerHTML = '';
+                loading.style.display = 'flex';
+                empty.style.display = 'none';
+
+                try {
+                    const res = await fetch(`${API_BASE}/rankings/view?level=${level}`);
+                    const data = await res.json();
+
+                    loading.style.display = 'none';
+
+                    if (!data.rankings || data.rankings.length === 0) {
+                        this.showEmpty(data.message || "Results not finalized yet.");
+                        return;
+                    }
+
+                    this.renderTable(data.rankings);
+
+                } catch (e) {
+                    console.error("Failed to load results", e);
+                    loading.style.display = 'none';
+                    this.showEmpty("Failed to load data.");
+                }
+            },
+
+            showEmpty(msg) {
+                const empty = document.getElementById('empty-state');
+                empty.querySelector('p').innerText = msg;
+                empty.style.display = 'flex';
+            },
+
+            renderTable(rankings) {
+                const tbody = document.getElementById('results-body');
+
+                tbody.innerHTML = rankings.map(r => `
+                    <tr>
+                        <td>
+                            <div class="rank-badge" style="${r.rank <= 3 ? 'background:var(--primary); color:white; width:28px; height:28px; line-height:28px; font-size:0.9rem;' : 'background:var(--gray-200); color:var(--text-primary); width:28px; height:28px; line-height:28px; font-size:0.9rem;'}">
+                                ${r.rank}
+                            </div>
+                        </td>
+                        <td>
+                            <div style="font-weight: 600; color: var(--text-primary);">${r.name}</div>
+                            <div style="font-size: 0.75rem; color: var(--text-tertiary); font-family: var(--font-mono);">${r.id}</div>
+                        </td>
+                        <td style="color: var(--text-secondary);">${r.department || '-'}</td>
+                        <td style="color: var(--text-secondary);">${r.college || '-'}</td>
+                        <td style="text-align: right; font-weight: 700; color: var(--primary-600); font-family: var(--font-mono);">${r.score}</td>
+                        <td style="text-align: right; font-family: var(--font-mono); color: var(--text-main);">${r.time}</td>
+                        <td style="text-align: center;">
+                            <span class="badge badge-success" style="font-size: 0.75rem;">${r.solved}</span>
+                        </td>
+                    </tr>
+                `).join('');
+            }
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            Results.init();
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,224 @@
+/* Landing Page Specific Styles */
+
+/* Navigation */
+.navbar {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    padding: var(--space-4) 0;
+    transition: all 0.3s ease;
+}
+
+.nav-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.nav-logo {
+    font-size: var(--text-xl);
+    font-weight: 800;
+    color: var(--primary-600);
+}
+
+.nav-links {
+    display: flex;
+    gap: var(--space-6);
+    align-items: center;
+    white-space: nowrap;
+}
+
+.nav-link {
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.nav-link:hover {
+    color: var(--primary-500);
+}
+
+/* Hero Section */
+.hero {
+    position: relative;
+    padding: var(--space-20) 0;
+    text-align: center;
+    background: linear-gradient(135deg, var(--primary-50) 0%, var(--white) 100%);
+    overflow: hidden;
+}
+
+/* Animated Gradient Blob */
+.hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(14, 165, 233, 0.1) 0%, rgba(255, 255, 255, 0) 70%);
+    animation: rotate 20s linear infinite;
+    z-index: 0;
+}
+
+@keyframes rotate {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.hero-content {
+    position: relative;
+    z-index: 1;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.hero-title {
+    font-size: 3.5rem;
+    line-height: 1.2;
+    margin-bottom: var(--space-4);
+    background: linear-gradient(to right, var(--primary-600), var(--secondary-600));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.hero-subtitle {
+    font-size: 1.25rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-8);
+}
+
+.event-card {
+    display: inline-flex;
+    gap: var(--space-8);
+    background: rgba(255, 255, 255, 0.8);
+    padding: var(--space-6);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg);
+    margin-bottom: var(--space-8);
+    backdrop-filter: blur(10px);
+}
+
+.event-detail {
+    text-align: left;
+}
+
+.event-label {
+    display: block;
+    font-size: 0.875rem;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.event-value {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+/* Features/Details Section */
+.section {
+    padding: var(--space-16) 10px;
+    height: 30rem;
+    margin-top: 10px;
+    padding-top: 10px;
+}
+
+.section-title {
+    text-align: center;
+    font-size: 2.25rem;
+    margin-bottom: var(--space-12);
+}
+
+.features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: var(--space-8);
+}
+
+.feature-card {
+    padding: var(--space-6);
+    border-radius: var(--radius-xl);
+    background: var(--bg-primary);
+    box-shadow: var(--shadow-md);
+    transition: transform 0.3s ease;
+    border: 1px solid var(--border-light);
+}
+
+.feature-card:hover {
+    transform: translateY(-5px);
+    box-shadow: var(--shadow-xl);
+}
+
+.feature-icon {
+    font-size: 2rem;
+    margin-bottom: var(--space-4);
+    color: var(--primary-500);
+}
+
+/* Timeline */
+.timeline {
+    position: relative;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.timeline-item {
+    display: flex;
+    gap: var(--space-4);
+    margin-bottom: var(--space-8);
+}
+
+.timeline-marker {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.marker-circle {
+    width: 24px;
+    height: 24px;
+    background: var(--primary-500);
+    border-radius: 50%;
+    z-index: 1;
+}
+
+.marker-line {
+    flex-grow: 1;
+    width: 2px;
+    background: var(--gray-200);
+    margin-top: var(--space-2);
+}
+
+/* Footer */
+.footer {
+    background: var(--gray-900);
+    color: white;
+    padding: var(--space-16) 0 var(--space-8);
+}
+
+.footer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--space-8);
+    margin-bottom: var(--space-12);
+}
+
+.footer-col h4 {
+    color: white;
+    margin-bottom: var(--space-4);
+}
+
+.footer-link {
+    display: block;
+    color: var(--gray-400);
+    margin-bottom: var(--space-2);
+}
+
+.footer-link:hover {
+    color: white;
+}

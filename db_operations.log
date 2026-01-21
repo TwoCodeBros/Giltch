@@ -1,0 +1,19 @@
+2026-01-20 00:09:18,153 - DatabaseManager - INFO - Connection pool initialized with database 'debug_marathon_v3'.
+2026-01-20 00:09:18,156 - DatabaseManager - ERROR - UPDATE Query failed: 1060 (42S21): Duplicate column name 'tab_switches'
+Query: ALTER TABLE participant_proctoring ADD COLUMN tab_switches INT DEFAULT 0;
+2026-01-20 00:09:18,160 - DatabaseManager - ERROR - UPDATE Query failed: 1060 (42S21): Duplicate column name 'focus_losses'
+Query: ALTER TABLE participant_proctoring ADD COLUMN focus_losses INT DEFAULT 0;
+2026-01-20 00:09:18,164 - DatabaseManager - ERROR - UPDATE Query failed: 1060 (42S21): Duplicate column name 'copy_attempts'
+Query: ALTER TABLE participant_proctoring ADD COLUMN copy_attempts INT DEFAULT 0;
+2026-01-20 00:09:18,173 - DatabaseManager - ERROR - UPDATE Query failed: 1060 (42S21): Duplicate column name 'screenshot_attempts'
+Query: ALTER TABLE participant_proctoring ADD COLUMN screenshot_attempts INT DEFAULT 0;
+2026-01-20 00:09:18,177 - DatabaseManager - ERROR - UPDATE Query failed: 1060 (42S21): Duplicate column name 'paste_attempts'
+Query: ALTER TABLE participant_proctoring ADD COLUMN paste_attempts INT DEFAULT 0;
+2026-01-20 00:09:18,198 - DatabaseManager - INFO - Update executed: 0 rows affected.
+2026-01-20 00:09:18,203 - DatabaseManager - ERROR - UPDATE Query failed: 1060 (42S21): Duplicate column name 'is_disqualified'
+Query: ALTER TABLE participant_proctoring ADD COLUMN is_disqualified TINYINT(1) DEFAULT 0;
+2026-01-20 00:22:24,340 - DatabaseManager - INFO - Connection pool initialized with database 'debug_marathon_v3'.
+2026-01-20 00:22:24,363 - DatabaseManager - INFO - Update executed: 0 rows affected.
+2026-01-20 00:22:24,379 - DatabaseManager - INFO - Update executed: 0 rows affected.
+2026-01-20 00:22:24,391 - DatabaseManager - INFO - Update executed: 0 rows affected.
+2026-01-20 00:22:24,396 - DatabaseManager - INFO - Update executed: 0 rows affected.

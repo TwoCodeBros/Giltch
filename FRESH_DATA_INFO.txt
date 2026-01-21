@@ -1,0 +1,35 @@
+DEBUG MARATHON - SYSTEM RESET INFO
+==================================
+
+Reset Date: 2026-01-11 22:54:23.736375
+
+ADMIN ACCOUNT
+-------------
+Username: admin
+Password: admin123
+
+CONTEST
+-------
+ID: 1
+Name: Debug Marathon 2025
+Status: Live
+Levels: 5 (Level 1 Active)
+
+SAMPLE PARTICIPANTS
+-------------------
+ID: PART001  |  Pass: pass123
+ID: PART002  |  Pass: pass123
+ID: PART003  |  Pass: pass123
+ID: PART004  |  Pass: pass123
+ID: PART005  |  Pass: pass123
+ID: PART006  |  Pass: pass123
+ID: PART007  |  Pass: pass123
+ID: PART008  |  Pass: pass123
+ID: PART009  |  Pass: pass123
+ID: PART010  |  Pass: pass123
+
+CONFIGURATION
+-------------
+Proctoring: Enabled
+Max Violations: 10
+Violations Reset: YES (Tables Cleared)

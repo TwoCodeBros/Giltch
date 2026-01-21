@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaderboard - Debug Marathon</title>
+
+    <!-- CSS -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/leaderboard.css">
+</head>
+
+<body>
+    <!-- Navbar (Will be hidden in projector mode) -->
+    <nav class="navbar glass">
+        <div class="container nav-container">
+            <a href="index.html" class="nav-logo">
+                <i class="fa-solid fa-code-branch"></i> Debug Marathon
+            </a>
+            <div class="nav-links">
+                <a href="index.html" class="nav-link">Home</a>|
+                <a href="participant.html" class="nav-link">Portal</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Header -->
+    <header class="leaderboard-header">
+        <div class="container">
+            <div class="lb-title">Live Leaderboard</div>
+            <div class="lb-status">
+                <span class="pulse"
+                    style="width: 8px; height: 8px; background: currentColor; border-radius: 50%;"></span>
+                LIVE UPDATES
+            </div>
+            <div style="margin-top: var(--space-4); opacity: 0.8; font-size: 0.875rem;">
+                Last Updated: <span id="last-updated">--:--:--</span>
+            </div>
+        </div>
+    </header>
+
+    <div class="container" style="margin-top: -30px; position: relative; z-index: 20;">
+        <div class="lb-controls">
+            <div class="search-box">
+                <i class="fa-solid fa-search text-gray-400"></i>
+                <input type="text" id="search-input" class="search-input" placeholder="Search participant...">
+            </div>
+
+            <div style="flex: 1;"></div>
+
+            <div class="level-select-container" style="margin-right: 1rem;">
+                <i class="fa-solid fa-layer-group" style="margin-right: 0.5rem; color: var(--text-secondary);"></i>
+                <select id="level-select" class="input" style="width: 150px; padding: 0.5rem; cursor: pointer;">
+                    <!-- Populated by JS -->
+                </select>
+            </div>
+
+            <button class="btn btn-primary" onclick="Leaderboard.downloadReport()">
+                <i class="fa-solid fa-file-export"></i> Export
+            </button>
+            <button class="btn btn-secondary" onclick="Leaderboard.logout()"
+                style="margin-left: 10px; color: var(--error); border-color: var(--error);">
+                <i class="fa-solid fa-sign-out"></i> Logout
+            </button>
+        </div>
+
+        <div class="lb-table-container">
+            <table class="lb-table">
+                <thead>
+                    <tr>
+                        <th style="width: 80px;">Rank</th>
+                        <th>Participant</th>
+                        <th>College / Dept</th>
+                        <th>Score</th>
+                        <th>Time Taken</th>
+                        <th>Solved</th>
+                    </tr>
+                </thead>
+                <tbody id="lb-body">
+                    <!-- Populated by JS -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container" style="text-align: center; color: var(--gray-500);">
+            &copy; 2025 Debug Marathon Leaderboard
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+    <script src="js/api.js"></script>
+    <script>
+        // Auth Check for Leaderboard Access
+        const token = localStorage.getItem('leader_token');
+        if (!token) {
+            window.location.href = 'leader_login.html';
+        }
+    </script>
+    <script src="js/leaderboard.js"></script>
+</body>
+
+</html>

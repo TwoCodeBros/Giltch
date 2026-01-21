@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Debug Marathon 2025 - Fix Bugs. Beat Time. Prove Your Skills.">
+    <title>Debug Marathon 2025 | Premium Coding Contest</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@600;700;800&family=Fira+Code:wght@400;500&display=swap"
+        rel="stylesheet">
+
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/landing.css">
+    <link rel="stylesheet" href="css/modern-forms.css">
+</head>
+
+<body>
+    <!-- Navigation -->
+    <nav class="navbar glass">
+        <div class="container nav-container">
+            <a href="#" class="nav-logo">
+                <i class="fa-solid fa-code-branch"></i> Debug Marathon
+            </a>
+
+            <div class="nav-links">
+                <a href="#hero" class="nav-link">Home</a>
+                <a href="#details" class="nav-link">About</a>
+                <a href="participant.html" class="nav-link">Player</a>
+                <a href="leaderboard.html" class="nav-link">Leaderboard</a>
+                <a href="results.html" class="nav-link">Results</a>
+                <a href="admin.html" class="nav-link">Admin</a>
+
+                <button id="theme-toggle" class="btn btn-secondary" aria-label="Toggle Theme">
+                    <i class="fa-solid fa-sun"></i>
+                </button>
+            </div>
+
+            <button class="menu-toggle" style="display: none;">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section id="hero" class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <h1 class="hero-title fade-in">Debug Marathon 2025-26</h1>
+                <p class="hero-subtitle fade-in">Fix Bugs. Beat Time. Prove Your Skills.</p>
+
+                <div class="event-card fade-in">
+                    <div class="event-detail">
+                        <span class="event-label">Date</span>
+                        <span class="event-value" id="dynamic-date">06-02-2026</span>
+                    </div>
+                    <div class="event-detail">
+                        <span class="event-label">Duration</span>
+                        <span class="event-value" id="hero-duration">5 Hours</span>
+                    </div>
+                    <div class="event-detail">
+                        <span class="event-label">Format</span>
+                        <span class="event-value" id="hero-format">5 Rounds</span>
+                    </div>
+                </div>
+
+                <div class="hero-actions fade-in" style="margin-top: var(--space-8);">
+                    <a href="participant.html" class="btn btn-primary" style="margin-right: var(--space-4);">
+                        Join as Participant
+                    </a>
+                    <a href="leaderboard.html" class="btn btn-secondary">
+                        View Leaderboard
+                    </a>
+                </div>
+            </div>
+
+            <img src="assets/images/hero.png" alt="Debug Marathon Illustration"
+                style="max-width: 80%; margin-top: var(--space-12); border-radius: var(--radius-xl); box-shadow: var(--shadow-2xl);"
+                class="fade-in">
+        </div>
+    </section>
+
+    <!-- Event Details -->
+    <section id="details" class="section">
+        <div class="container">
+            <h2 class="section-title">What is Debug Marathon?</h2>
+
+            <div class="features-grid">
+                <!-- Info Card -->
+                <div class="feature-card">
+                    <i class="fa-solid fa-trophy feature-icon"></i>
+                    <h3>Competitive Coding</h3>
+                    <p style="margin-top: var(--space-3); color: var(--text-secondary);">
+                        Compete against the best developers in a timed environment where accuracy and speed matter.
+                    </p>
+                </div>
+
+                <!-- Format Card -->
+                <div class="feature-card">
+                    <i class="fa-solid fa-layer-group feature-icon"></i>
+                    <h3 id="rounds-title">5 levels</h3>
+                    <ul id="rounds-list"
+                        style="margin-top: var(--space-3); color: var(--text-secondary); padding-left: var(--space-4);">
+                        <li>level 1 (30 min)</li>
+                        <li>level 2 (45 min)</li>
+                        <li>level 3 (45 min)</li>
+                        <li>level 4 (45 min)</li>
+                        <li>level 5 (45 min)</li>
+                    </ul>
+                </div>
+
+                <!-- Languages Card -->
+                <div class="feature-card">
+                    <i class="fa-solid fa-code feature-icon"></i>
+                    <h3>Multi-Language</h3>
+                    <div id="languages-container"
+                        style="display: flex; gap: var(--space-4); margin-top: var(--space-3); font-size: 1.5rem; color: var(--text-secondary);">
+                        <i class="fa-brands fa-python" title="Python"></i>
+                        <i class="fa-brands fa-java" title="Java"></i>
+                        <i class="fa-brands fa-js" title="JavaScript"></i>
+                        <span title="C++" style="font-weight: bold; font-size: 1rem;">C++</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Rules / Proctoring -->
+    <section class="section" style="background-color: var(--bg-secondary);">
+        <div class="container">
+            <h2 class="section-title">Fair Play & Proctoring System</h2>
+
+            <div class="features-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                <div class="feature-card" style="text-align: center;">
+                    <i class="fa-solid fa-eye-slash feature-icon" style="color: var(--error);"></i>
+                    <h3>Tab Monitoring</h3>
+                    <p class="text-sm">Tab switches are tracked and penalized.</p>
+                </div>
+
+                <div class="feature-card" style="text-align: center;">
+                    <i class="fa-solid fa-lock feature-icon" style="color: var(--error);"></i>
+                    <h3>No Clipboard</h3>
+                    <p class="text-sm">Copy/Paste operations are blocked entirely.</p>
+                </div>
+
+                <div class="feature-card" style="text-align: center;">
+                    <i class="fa-solid fa-camera feature-icon" style="color: var(--error);"></i>
+                    <h3>Screenshot Detection</h3>
+                    <p class="text-sm">Screenshot attempts are detected and logged.</p>
+                </div>
+
+                <div class="feature-card" style="text-align: center;">
+                    <i class="fa-solid fa-keyboard feature-icon" style="color: var(--error);"></i>
+                    <h3>Keys Blocked</h3>
+                    <p class="text-sm">DevTools shortcuts (F12, Ctrl+Shift+I) are blocked.</p>
+                </div>
+            </div>
+
+            <div class="glass-card"
+                style="margin-top: var(--space-12); padding: var(--space-6); text-align: center; border-left: 4px solid var(--warning);">
+                <h3 style="color: var(--warning); margin-bottom: var(--space-2);">⚠️ Violation Policy</h3>
+                <p>3 Violations = Warning | 5 Violations = -50 Points | 10 Violations = Disqualification</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Timeline -->
+    <section class="section">
+        <div class="container">
+            <h2 class="section-title">Event Timeline</h2>
+
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="timeline-marker">
+                        <div class="marker-circle"></div>
+                        <div class="marker-line"></div>
+                    </div>
+                    <div class="timeline-content">
+                        <h4>Registration Opens</h4>
+                        <p class="text-sm text-secondary">Sign up and get your participant ID.</p>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-marker">
+                        <div class="marker-circle"></div>
+                        <div class="marker-line"></div>
+                    </div>
+                    <div class="timeline-content">
+                        <h4>Contest Begins</h4>
+                        <p class="text-sm text-secondary">Log in to the portal. Round 1 starts.</p>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-marker">
+                        <div class="marker-circle"></div>
+                    </div>
+                    <div class="timeline-content">
+                        <h4>Final Results</h4>
+                        <p class="text-sm text-secondary">Winners announced and certificates distributed.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <h4>Debug Marathon</h4>
+                    <p class="text-secondary text-sm">Department of Computer Science (Shift - II)<br>Sacred Heart
+                        College
+                        (Autonomous)</p>
+                </div>
+
+                <div class="footer-col">
+                    <h4>Contact</h4>
+                    <p class="text-secondary text-sm">debug.marathon@college.edu</p>
+                </div>
+
+                <div class="footer-col">
+                    <h4>Follow Us</h4>
+                    <div style="display: flex; gap: var(--space-4);">
+                        <a href="#" style="color: white;"><i class="fa-brands fa-linkedin"></i></a>
+                        <a href="#" style="color: white;"><i class="fa-brands fa-instagram"></i></a>
+                        <a href="#" style="color: white;"><i class="fa-brands fa-twitter"></i></a>
+                        <a href="#" style="color: white;"><i class="fa-brands fa-github"></i></a>
+                    </div>
+                </div>
+            </div>
+            <div
+                style="text-align: center; padding-top: var(--space-8); border-top: 1px solid var(--gray-800); color: var(--gray-500); font-size: 0.875rem;">
+                &copy; 2025 Debug Marathon. All rights reserved.
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Set dynamic date to next week Saturday for demo purposes
+        // const date = new Date();
+        // date.setDate(date.getDate() + (6 - date.getDay() + 7) % 7 + 7);
+        // document.getElementById('dynamic-date').textContent = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+        // Theme Toggle Logic
+        const themeToggle = document.getElementById('theme-toggle');
+        const icon = themeToggle.querySelector('i');
+        const html = document.documentElement;
+
+        themeToggle.addEventListener('click', () => {
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+
+            html.setAttribute('data-theme', newTheme);
+            icon.className = newTheme === 'light' ? 'fa-solid fa-sun' : 'fa-solid fa-moon';
+        });
+
+        // ========== DYNAMIC CONTEST DATA UPDATE ==========
+
+        // Language icon mapping
+        const languageIcons = {
+            'python': '<i class="fa-brands fa-python" title="Python"></i>',
+            'java': '<i class="fa-brands fa-java" title="Java"></i>',
+            'javascript': '<i class="fa-brands fa-js" title="JavaScript"></i>',
+            'c++': '<span title="C++" style="font-weight: bold; font-size: 1rem;">C++</span>',
+            'cpp': '<span title="C++" style="font-weight: bold; font-size: 1rem;">C++</span>',
+            'c': '<span title="C" style="font-weight: bold; font-size: 1rem;">C</span>',
+            'ruby': '<span title="Ruby" style="font-weight: bold; font-size: 1rem;">💎</span>',
+            'go': '<span title="Go" style="font-weight: bold; font-size: 1rem;">Go</span>',
+            'rust': '<span title="Rust" style="font-weight: bold; font-size: 1rem;">🦀</span>',
+            'php': '<i class="fa-brands fa-php" title="PHP"></i>',
+            'swift': '<i class="fa-brands fa-swift" title="Swift"></i>',
+            'kotlin': '<span title="Kotlin" style="font-weight: bold; font-size: 1rem;">Kt</span>'
+        };
+
+        async function fetchContestData() {
+            try {
+                // Fetch list of contests
+                const contestsRes = await fetch('/api/contest/');
+                const contestsData = await contestsRes.json();
+                const contests = contestsData.contests || [];
+
+                // Find active or first contest
+                const activeContest = contests.find(c => c.status === 'live' || c.status === 'scheduled') || contests[0];
+
+                if (!activeContest) {
+                    console.log('No contest found');
+                    return;
+                }
+
+                // Update Hero UI with contest basic info
+                updateHeroUI(activeContest);
+
+                // Fetch rounds for the contest (using public endpoint)
+                const roundsRes = await fetch(`/api/contest/${activeContest.id}/rounds/public`);
+
+                if (roundsRes.ok) {
+                    const roundsData = await roundsRes.json();
+                    const rounds = roundsData.rounds || [];
+                    updateRoundsUI(rounds);
+                }
+
+                // Fetch supported languages from questions
+                const questionsRes = await fetch('/api/contest/questions');
+                if (questionsRes.ok) {
+                    const questionsData = await questionsRes.json();
+                    const questions = questionsData.questions || [];
+
+                    // Extract unique languages from boilerplate_code
+                    const languages = new Set();
+                    questions.forEach(q => {
+                        if (q.boilerplate_code && typeof q.boilerplate_code === 'object') {
+                            Object.keys(q.boilerplate_code).forEach(lang => {
+                                languages.add(lang.toLowerCase());
+                            });
+                        }
+                    });
+
+                    if (languages.size > 0) {
+                        updateLanguagesUI(Array.from(languages));
+                    }
+                }
+
+            } catch (error) {
+                console.error('Error fetching contest data:', error);
+            }
+        }
+
+        function updateHeroUI(contest) {
+            if (!contest) return;
+
+            // Update Date
+            const dateEl = document.getElementById('dynamic-date');
+            if (contest.start_time) {
+                const date = new Date(contest.start_time);
+                dateEl.textContent = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            }
+
+            // Update Duration
+            const durationEl = document.getElementById('hero-duration');
+            if (contest.duration_minutes) {
+                const hours = Math.floor(contest.duration_minutes / 60);
+                const mins = contest.duration_minutes % 60;
+                let durationStr = '';
+                if (hours > 0) durationStr += `${hours} Hour${hours > 1 ? 's' : ''}`;
+                if (mins > 0) durationStr += (durationStr ? ' ' : '') + `${mins} Min${mins > 1 ? 's' : ''}`;
+                durationEl.textContent = durationStr || 'TBD';
+            }
+        }
+
+        function updateRoundsUI(rounds) {
+            if (!rounds || rounds.length === 0) return;
+
+            const roundsTitle = document.getElementById('rounds-title');
+            const roundsList = document.getElementById('rounds-list');
+            const heroFormat = document.getElementById('hero-format');
+
+            // Update title and hero format
+            const countStr = `${rounds.length} Round${rounds.length > 1 ? 's' : ''}`;
+            roundsTitle.textContent = countStr;
+            if (heroFormat) heroFormat.textContent = countStr;
+
+            // Update rounds list
+            roundsList.innerHTML = '';
+            rounds.forEach((round, index) => {
+                const li = document.createElement('li');
+                const roundNum = index + 1;
+                const title = round.title || `Round ${roundNum}`;
+                const duration = round.time_limit_minutes || round.time_limit || 30;
+
+                li.textContent = `${title} (${duration} min)`;
+                roundsList.appendChild(li);
+            });
+        }
+
+        function updateLanguagesUI(languages) {
+            const container = document.getElementById('languages-container');
+
+            // Clear existing content
+            container.innerHTML = '';
+
+            // Add icons for each language
+            languages.forEach(lang => {
+                const langKey = lang.toLowerCase();
+                const iconHTML = languageIcons[langKey] || `<span title="${lang}" style="font-weight: bold; font-size: 1rem;">${lang}</span>`;
+
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = iconHTML;
+                container.appendChild(tempDiv.firstChild);
+            });
+        }
+
+        // Fetch contest data on page load
+        fetchContestData();
+
+        // ========== END OF SCRIPTS ==========
+    </script>
+</body>
+
+</html>

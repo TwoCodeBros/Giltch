@@ -1,0 +1,199 @@
+/* Leaderboard Specific Styles */
+
+.leaderboard-header {
+    background: linear-gradient(135deg, var(--gray-900) 0%, var(--gray-800) 100%);
+    color: white;
+    padding: var(--space-8) 0;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+}
+
+.leaderboard-header::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: url('../assets/images/hero.png') center/cover opacity 0.1;
+    /* Subtle texture */
+    opacity: 0.1;
+}
+
+.lb-title {
+    font-size: 2.5rem;
+    margin-bottom: var(--space-4);
+    position: relative;
+    z-index: 1;
+}
+
+.lb-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    background: rgba(16, 185, 129, 0.2);
+    color: var(--success);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-full);
+    font-weight: 600;
+    position: relative;
+    z-index: 1;
+}
+
+.lb-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: -30px;
+    margin-bottom: var(--space-8);
+    position: relative;
+    z-index: 10;
+}
+
+.search-box {
+    background: white;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    align-items: center;
+    width: 300px;
+}
+
+.search-input {
+    border: none;
+    outline: none;
+    width: 100%;
+    margin-left: var(--space-2);
+    font-size: 1rem;
+}
+
+/* Table Styles */
+.lb-table-container {
+    background: white;
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    overflow: hidden;
+    margin-bottom: var(--space-12);
+}
+
+.lb-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.lb-table th {
+    background: var(--gray-50);
+    padding: var(--space-4) var(--space-6);
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border-bottom: 2px solid var(--border-light);
+}
+
+.lb-table td {
+    padding: var(--space-4) var(--space-6);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.lb-row {
+    transition: background-color 0.2s;
+}
+
+.lb-row:hover {
+    background-color: var(--primary-50);
+}
+
+/* Rank Styling */
+.rank-badge {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-weight: 700;
+    font-size: 1.1rem;
+    background: var(--gray-100);
+    color: var(--text-secondary);
+}
+
+.rank-1 .rank-badge {
+    background: #fee2e2;
+    color: #ef4444;
+    /* Fallback (Gold is actually #FFD700) */
+    background: linear-gradient(135deg, #FFD700, #FDB931);
+    color: #92400e;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.rank-2 .rank-badge {
+    background: linear-gradient(135deg, #E0E0E0, #BDBDBD);
+    color: #424242;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.rank-3 .rank-badge {
+    background: linear-gradient(135deg, #CD7F32, #A0522D);
+    color: #fff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.score-cell {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--primary-600);
+    font-size: 1.1rem;
+}
+
+/* Projector Mode */
+body.projector-mode {
+    background: black;
+    color: white;
+}
+
+body.projector-mode .navbar,
+body.projector-mode .footer {
+    display: none;
+}
+
+body.projector-mode .leaderboard-header {
+    padding: var(--space-4) 0;
+    background: black;
+}
+
+body.projector-mode .lb-title {
+    color: white;
+    font-size: 3rem;
+}
+
+body.projector-mode .container {
+    max-width: 100%;
+    padding: 0 var(--space-8);
+}
+
+body.projector-mode .lb-table-container {
+    background: #111;
+    box-shadow: none;
+    border: 1px solid #333;
+}
+
+body.projector-mode .lb-table th {
+    background: #222;
+    color: #aaa;
+    border-bottom-color: #444;
+    font-size: 1.5rem;
+}
+
+body.projector-mode .lb-table td {
+    background: #111;
+    color: white;
+    border-bottom-color: #333;
+    font-size: 1.5rem;
+    padding: var(--space-6);
+}
+
+body.projector-mode .lb-row:nth-child(even) td {
+    background: #1a1a1a;
+}

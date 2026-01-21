@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Debug Marathon</title>
+
+    <!-- CSS -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/admin.css">
+    <link rel="stylesheet" href="css/modern-forms.css">
+    <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+    <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
+    <!-- SortableJS for Drag and Drop -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+    <!-- Socket.IO for Real-time Updates -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+
+<body>
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- ADMIN LOGIN -->
+    <div id="admin-login"
+        style="display: flex; height: 100vh; align-items: center; justify-content: center; background: #e2e8f0; background-image: radial-gradient(#cbd5e1 1px, transparent 1px); background-size: 24px 24px;">
+        <div class="login-card" style="width: 100%; max-width: 400px; text-align: center;">
+            <i class="fa-solid fa-user-shield"
+                style="font-size: 4rem; background: var(--primary-gradient); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 1.5rem;"></i>
+            <h2 style="margin-bottom: 2rem; font-weight: 800;">Admin Access</h2>
+            <form id="login-form">
+                <div style="margin-bottom: 1rem;">
+                    <input type="text" id="admin-username" class="input" placeholder="Username" required>
+                </div>
+                <div style="margin-bottom: 2rem;">
+                    <input type="password" id="admin-password" class="input" placeholder="Password" required>
+                </div>
+                <button type="submit" class="btn btn-primary"
+                    style="width: 100%; padding: 1rem !important; font-size: 1.1rem !important;">Login to
+                    Dashboard</button>
+            </form>
+            <div style="margin-top: var(--space-4);">
+                <a href="#"
+                    onclick="document.getElementById('login-form').style.display='none';document.getElementById('register-form').style.display='block';return false;"
+                    style="color: var(--primary-500); font-size: 0.875rem;">Register New Admin</a> |
+                <a href="index.html" style="color: var(--primary-500); font-size: 0.875rem;">Back to Home</a>
+            </div>
+
+            <form id="register-form" style="display:none; margin-top:1rem;"
+                onsubmit="event.preventDefault(); Admin.registerAdmin();">
+                <input type="text" id="reg-username" class="input" placeholder="Username"
+                    style="width: 100%; margin-bottom: var(--space-4);" required>
+                <input type="email" id="reg-email" class="input" placeholder="Email Address"
+                    style="width: 100%; margin-bottom: var(--space-4);" required>
+                <input type="password" id="reg-password" class="input" placeholder="Password"
+                    style="width: 100%; margin-bottom: var(--space-4);" required>
+                <input type="password" id="reg-confirm-password" class="input" placeholder="Confirm Password"
+                    style="width: 100%; margin-bottom: var(--space-4);" required>
+                <input type="text" id="reg-fullname" class="input" placeholder="Full Name (Optional)"
+                    style="width: 100%; margin-bottom: var(--space-6);">
+                <button type="submit" class="btn btn-secondary" style="width: 100%;">Submit Request</button>
+                <div style="margin-top: var(--space-4);">
+                    <a href="#"
+                        onclick="document.getElementById('register-form').style.display='none';document.getElementById('login-form').style.display='block';return false;"
+                        style="color: var(--primary-500); font-size: 0.875rem;">Back to Login</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ADMIN DASHBOARD -->
+    <div id="admin-dashboard" style="display: none;">
+        <!-- Sidebar -->
+        <aside class="admin-sidebar">
+            <div class="sidebar-header">
+                Debug Admin
+            </div>
+            <div class="sidebar-menu">
+                <div class="menu-item active">
+                    <i class="fa-solid fa-home"></i> Dashboard
+                </div>
+                <div class="menu-item">
+                    <i class="fa-solid fa-users"></i> Participants
+                </div>
+                <div class="menu-item">
+                    <i class="fa-solid fa-code"></i> Questions
+                </div>
+                <div class="menu-item">
+                    <i class="fa-solid fa-eye"></i> Proctoring
+                </div>
+                <!-- Leaders Management -->
+                <div class="menu-item">
+                    <i class="fa-solid fa-user-tie"></i> Leaders
+                </div>
+                <div class="menu-item">
+                    <i class="fa-solid fa-user-clock"></i> Pending Admins
+                </div>
+                <div class="menu-item" onclick="window.location.href='index.html'">
+                    <i class="fa-solid fa-sign-out"></i> Logout
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <!-- Main Content -->
+        <main class="admin-main">
+            <div style="padding: 2rem; text-align: center; color: var(--text-secondary);">
+                <i class="fa-solid fa-circle-notch fa-spin" style="font-size: 2rem; margin-bottom: 1rem;"></i>
+                <h2>Loading Admin Dashboard...</h2>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="js/main.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/admin.js"></script>
+</body>
+
+</html>
