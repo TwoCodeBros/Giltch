@@ -70,6 +70,27 @@ const Admin = {
 
         this.socket.on('participant:submitted', (data) => {
             this.addActivityFeedItem(`${data.name} submitted solution for ${data.question}`, 'submit');
+            // Trigger stats update
+            this.updateDashboardStats();
+        });
+
+        // GENERIC STATS UPDATE (Counters)
+        this.socket.on('admin:stats_update', () => {
+            this.updateDashboardStats();
+        });
+
+        this.socket.on('contest:stats_update', () => {
+            this.updateDashboardStats();
+        });
+
+        // PROCTORING LIVE UPDATES
+        this.socket.on('proctoring:violation', (data) => {
+            this.addActivityFeedItem(`${data.participant_id}: ${data.violation_type}`, 'violation');
+            this.updateDashboardStats(); // Update violations counter
+            // Also refresh proctoring view if active
+            if (this.currentView === 'proctoring') {
+                this.refreshProctoringData();
+            }
         });
     },
 

@@ -84,6 +84,17 @@ def participant_login():
             print(f"Proctoring init warning: {ex}")
         # -----------------------
         
+        # Emit Real-time Event
+        try:
+            from extensions import socketio
+            socketio.emit('participant:joined', {
+                'participant_id': user['username'],
+                'name': user['full_name'],
+                'contest_id': active_contest_id
+            })
+        except: pass
+
+        
         return jsonify({
             'success': True,
             'participant': {

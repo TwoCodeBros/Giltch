@@ -291,8 +291,10 @@
             // State Cache
             globalLevel: 1,
             globalStatus: 'pending',
+            roundsMap: {}, // Status of all rounds from DB
             userStatus: 'NOT_STARTED',
             isEliminated: false,
+
             userMaxLevel: 1,
 
             async init(user) {
@@ -368,7 +370,9 @@
                         this.userStatus = res.status || 'NOT_STARTED';
                         this.globalLevel = res.global_level || 1;
                         this.globalStatus = res.global_level_status || 'pending';
+                        this.roundsMap = res.rounds_map || {}; // Sync Rounds
                         this.isEliminated = res.is_eliminated || false;
+
 
                         this.solvedQuestions = new Set(res.solved_ids || []);
 
@@ -456,26 +460,23 @@
             },
 
             resolveLevelStatus(level) {
-                // If Level < Max User Level -> Completed
+                // 1. Get Global Status from Map (Single Source of Truth)
+                // Default to 'pending' if not found
+                const gStatus = this.roundsMap[level] || 'pending';
+
+                // 2. If Global is Completed -> Everyone sees Completed/Closed
+                if (gStatus === 'completed') return 'COMPLETED';
+
+                // 3. Check User Progress (If they finished it personally)
                 if (level < this.userMaxLevel) return 'COMPLETED';
+                if (level === this.userMaxLevel && this.userStatus === 'COMPLETED') return 'COMPLETED';
 
-                // If Level > Max User Level -> Locked
-                if (level > this.userMaxLevel) return 'LOCKED';
+                // 4. Global Activation (Admin overrides Local Lock)
+                if (gStatus === 'active') return 'ACTIVE';
+                if (gStatus === 'paused') return 'PAUSED';
 
-                // If Level == Max User Level:
-                // Check if user has completed it but system hasn't bumped them yet (e.g. waiting for unlock)
-                if (this.userStatus === 'COMPLETED') return 'COMPLETED';
-
-                // Otherwise this is the active/waiting level
-                // Check global contest state
-                if (level > this.globalLevel) return 'WAITING'; // Admin hasn't reached here
-                if (level === this.globalLevel) {
-                    if (this.globalStatus === 'active') return 'ACTIVE';
-                    if (this.globalStatus === 'paused') return 'PAUSED';
-                    return 'WAITING';
-                }
-
-                return 'LOCKED'; // Fallback
+                // 5. Default
+                return 'LOCKED';
             },
 
             buildLevelCard(level, status) {

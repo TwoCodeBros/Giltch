@@ -132,6 +132,7 @@ def start_contest(contest_id):
         'start_time': datetime.datetime.utcnow().isoformat(),
         'server_time': datetime.datetime.utcnow().isoformat()
     })
+    socketio.emit('contest:stats_update', {'contest_id': contest_id})
     return jsonify({'success': True})
 
 @bp.route('/<contest_id>/control/pause', methods=['POST'])
@@ -141,6 +142,7 @@ def pause_contest(contest_id):
     db_manager.execute_update(query, (contest_id,))
     from extensions import socketio
     socketio.emit('contest:paused', {'contest_id': contest_id})
+    socketio.emit('contest:stats_update', {'contest_id': contest_id})
     return jsonify({'success': True})
 
 @bp.route('/<contest_id>/control/end', methods=['POST'])
@@ -150,6 +152,7 @@ def end_contest(contest_id):
     db_manager.execute_update(query, (contest_id,))
     from extensions import socketio
     socketio.emit('contest:ended', {'contest_id': contest_id})
+    socketio.emit('contest:stats_update', {'contest_id': contest_id})
     return jsonify({'success': True})
 
 @bp.route('/<contest_id>/level/<int:level_number>/activate', methods=['POST'])
@@ -568,6 +571,14 @@ def submit_question():
         from extensions import socketio
         socketio.emit('admin:stats_update', {'user_id': uid, 'contest_id': contest_id})
         
+        # Emit feed event
+        socketio.emit('participant:submitted', {
+            'participant_id': uid,
+            'name': user_id, # Fallback, ideally fetch name
+            'question': f"Q{question_id}",
+            'contest_id': contest_id
+        })
+        
     return jsonify({
         'success': all_passed,
         'status': status,
@@ -630,7 +641,12 @@ def get_participant_state():
         query = "SELECT level, violation_count, questions_solved, start_time, status FROM participant_level_stats WHERE user_id=%s AND contest_id=%s ORDER BY level DESC LIMIT 1"
         res = db_manager.execute_query(query, (uid, contest_id))
 
-        # Fetch Global State (Active Level & Countdown) - Needed for everyone
+        # Fetch ALL Round Statuses (Single Source of Truth)
+        rounds_query = "SELECT round_number, status FROM rounds WHERE contest_id=%s ORDER BY round_number ASC"
+        rounds_res = db_manager.execute_query(rounds_query, (contest_id,))
+        rounds_map = {r['round_number']: r['status'] for r in rounds_res} if rounds_res else {}
+
+        # Fetch Global Active Level (for legacy compatibility or specific logic)
         gl_query = "SELECT round_number, status FROM rounds WHERE contest_id=%s AND status IN ('active', 'paused') ORDER BY round_number DESC LIMIT 1"
         gl_res = db_manager.execute_query(gl_query, (contest_id,))
         global_level_data = gl_res[0] if gl_res else {'round_number': 1, 'status': 'pending'}
@@ -638,44 +654,11 @@ def get_participant_state():
         cd_key = f"contest_{contest_id}_countdown"
         cd_res = db_manager.execute_query("SELECT value FROM admin_state WHERE key_name=%s", (cd_key,))
         
-        # Check for Unlock Condition (Shortlist) if COMPLETED
-        current_state = res[0] if res else None
+        # Check for Unlock Condition (Shortlist) logic ONLY if we enforce strict qualification
+        # But per requirements: "When admin marks level as ACTIVE, it must automatically become unlocked".
+        # So we relax the "Elimination" check based on being behind.
         
-        if current_state and current_state['status'] == 'COMPLETED':
-            current_lvl = current_state['level']
-            next_lvl = current_lvl + 1
-            
-            # Check Shortlist
-            # Logic: If Shortlist table has entries for this level, strict check.
-            # If table is empty for this level, assume OPEN ROUND (everyone progresses).
-            
-            sl_check_q = "SELECT COUNT(*) as cnt FROM shortlisted_participants WHERE contest_id=%s AND level=%s"
-            sl_check_res = db_manager.execute_query(sl_check_q, (contest_id, next_lvl))
-            has_shortlist = (sl_check_res and sl_check_res[0]['cnt'] > 0)
-            
-            allowed = False
-            if not has_shortlist:
-                allowed = True # Open Round
-            else:
-                sl_q = "SELECT is_allowed FROM shortlisted_participants WHERE contest_id=%s AND level=%s AND user_id=%s"
-                sl_res = db_manager.execute_query(sl_q, (contest_id, next_lvl, uid))
-                if sl_res and sl_res[0]['is_allowed']:
-                    allowed = True
-            
-            if allowed:
-                 # Auto-create next level state
-                 db_manager.execute_update(
-                     "INSERT IGNORE INTO participant_level_stats (user_id, contest_id, level, violation_count, status) VALUES (%s, %s, %s, 0, 'NOT_STARTED')",
-                     (uid, contest_id, next_lvl)
-                 )
-                 # Refresh Res to get new level
-                 res = db_manager.execute_query(query, (uid, contest_id))
-                 current_state = res[0] if res else None
-
-        # Fetch Solved Questions
-        solved_query = "SELECT question_id FROM submissions WHERE user_id=%s AND contest_id=%s AND is_correct=1"
-        solved_res = db_manager.execute_query(solved_query, (uid, contest_id))
-        solved_ids = [s['question_id'] for s in solved_res] if solved_res else []
+        current_state = res[0] if res else None
         
         # Decode Countdown State properly
         countdown_data = {'active': False}
@@ -694,8 +677,9 @@ def get_participant_state():
             'start_time': current_state['start_time'].isoformat() if current_state and current_state['start_time'] else None,
             'global_level': global_level_data['round_number'],
             'global_level_status': global_level_data['status'],
+            'rounds_map': rounds_map, # New Field: Status of every round from DB
             'countdown': countdown_data,
-            'is_eliminated': (global_level_data['round_number'] > (current_state['level'] if current_state else 1) and (not current_state or current_state['status'] == 'COMPLETED'))
+            'is_eliminated': False # Relaxed: Let Admin status dictate access
         })
     except Exception as e:
         import traceback
