@@ -663,22 +663,24 @@ const Admin = {
     },
 
     async toggleCountdown() {
-        // Read selected duration
-        const sel = document.getElementById('wait-time-selector');
-        const duration = sel ? sel.value : 15;
-        const btn = document.getElementById('btn-countdown');
-        const isStarted = btn && btn.innerText.includes('Stop'); // Simple check or check backend state locally
-
-        const action = isStarted ? 'stop' : 'start';
-
+        // Fetch fresh state first to be sure
         try {
-            const res = await API.request(`/contest/${this.activeContestId}/countdown`, 'POST', { action, duration });
-            if (res.success) {
-                // UI update handled by socket or refresh
-                this.updateDashboardStats();
+            const res = await API.request(`/contest/${this.activeContestId}/countdown`);
+            const isActive = res.active === true;
+            
+            // Toggle
+            const action = isActive ? 'stop' : 'start';
+            const sel = document.getElementById('wait-time-selector');
+            const duration = sel ? sel.value : 15;
+
+            const toggleRes = await API.request(`/contest/${this.activeContestId}/countdown`, 'POST', { action, duration });
+            
+            if (toggleRes.success) {
+                this.loadDashboard(); // Refresh UI fully
                 Toast.show(`Countdown ${action.toUpperCase()}ED`, 'success');
             }
-        } catch (err) {
+        } catch (e) {
+            console.error(e);
             Toast.show("Failed to toggle countdown", "error");
         }
     },

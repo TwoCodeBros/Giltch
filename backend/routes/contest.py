@@ -5,6 +5,7 @@ import os
 import uuid
 import datetime
 import json
+import traceback
 from db_connection import db_manager
 from auth_middleware import admin_required
 
@@ -158,18 +159,34 @@ def end_contest(contest_id):
 @bp.route('/<contest_id>/level/<int:level_number>/activate', methods=['POST'])
 @admin_required
 def activate_level_admin(contest_id, level_number):
-    # Set all active to pending
-    db_manager.execute_update("UPDATE rounds SET status='pending' WHERE contest_id=%s AND status='active'", (contest_id,))
-    
-    # Set target to active
-    db_manager.execute_update("UPDATE rounds SET status='active' WHERE contest_id=%s AND round_number=%s", (contest_id, level_number))
-    
-    from extensions import socketio
-    socketio.emit('level:activated', {'contest_id': contest_id, 'level': level_number})
-    # Also broadcast generic contest update to ensure all clients refresh state
-    socketio.emit('contest:updated', {'contest_id': contest_id})
-    
-    return jsonify({'success': True})
+    try:
+        # 1. Set all currently active rounds to pending
+        db_manager.execute_update("UPDATE rounds SET status='pending' WHERE contest_id=%s AND status='active'", (contest_id,))
+        
+        # 2. Check if the target round exists
+        check_query = "SELECT round_id FROM rounds WHERE contest_id=%s AND round_number=%s"
+        existing = db_manager.execute_query(check_query, (contest_id, level_number))
+        
+        if not existing:
+            # Create the round on the fly if it's missing (e.g. Level 4/5)
+            insert_query = """
+                INSERT INTO rounds (contest_id, round_name, round_number, time_limit_minutes, total_questions, status, is_locked)
+                VALUES (%s, %s, %s, 45, 0, 'active', 0)
+            """
+            db_manager.execute_update(insert_query, (contest_id, f"Level {level_number}", level_number))
+        else:
+            # Set target to active
+            db_manager.execute_update("UPDATE rounds SET status='active' WHERE contest_id=%s AND round_number=%s", (contest_id, level_number))
+        
+        from extensions import socketio
+        socketio.emit('level:activated', {'contest_id': contest_id, 'level': level_number})
+        # Also broadcast generic contest update to ensure all clients refresh state
+        socketio.emit('contest:updated', {'contest_id': contest_id})
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 @bp.route('/<contest_id>/level/<int:level_number>/pause', methods=['POST'])
 @admin_required
@@ -396,16 +413,27 @@ def run_code():
     level = data.get('level', 1)
     
     if not question_id:
+        print("RUN CODE ERROR: Question ID missing")
         return jsonify({'error': 'Question ID missing'}), 400
 
+    print(f"RUN CODE: Fetching Question ID: {question_id} (Type: {type(question_id)})")
+
     # 1. Fetch Question details (Inputs)
+    try:
+        qid = int(question_id)
+    except:
+        qid = question_id
+
     query = "SELECT test_input, expected_output, test_cases FROM questions WHERE question_id=%s"
-    q_res = db_manager.execute_query(query, (question_id,))
+    q_res = db_manager.execute_query(query, (qid,))
     
     if not q_res:
-        return jsonify({'error': 'Question not found'}), 404
-        
-    question = q_res[0]
+        print(f"RUN CODE WARN: Question ID {qid} NOT FOUND. Defaulting to Playground Mode.")
+        # User requested: "showing only output of the program"
+        # We will create a dummy question context so they can see their code run
+        question = {'test_input': '', 'expected_output': '', 'test_cases': '[]'}
+    else:
+        question = q_res[0]
     
     # Determine input/expected (Priority: Explicit Cols -> JSON)
     inputs = []
@@ -645,6 +673,10 @@ def get_participant_state():
         rounds_query = "SELECT round_number, status FROM rounds WHERE contest_id=%s ORDER BY round_number ASC"
         rounds_res = db_manager.execute_query(rounds_query, (contest_id,))
         rounds_map = {r['round_number']: r['status'] for r in rounds_res} if rounds_res else {}
+        
+        # Force Level 1 to be ACTIVE if it exists and is pending, so users can start
+        if rounds_map.get(1) == 'pending' or 1 not in rounds_map:
+             rounds_map[1] = 'active'
 
         # Fetch Global Active Level (for legacy compatibility or specific logic)
         gl_query = "SELECT round_number, status FROM rounds WHERE contest_id=%s AND status IN ('active', 'paused') ORDER BY round_number DESC LIMIT 1"
@@ -660,6 +692,15 @@ def get_participant_state():
         
         current_state = res[0] if res else None
         
+        # Get Duration
+        level_duration = 45 # Default
+        if current_state:
+            lvl = current_state['level']
+            # Fetch round duration
+            rd_res = db_manager.execute_query("SELECT time_limit_minutes FROM rounds WHERE contest_id=%s AND round_number=%s", (contest_id, lvl))
+            if rd_res:
+                 level_duration = rd_res[0]['time_limit_minutes']
+
         # Decode Countdown State properly
         countdown_data = {'active': False}
         if cd_res:
@@ -667,9 +708,15 @@ def get_participant_state():
                  countdown_data = json.loads(cd_res[0]['value'])
              except: pass
 
+        # Fetch Solved Question IDs (Fix NameError)
+        s_query = "SELECT question_id FROM submissions WHERE user_id=%s AND contest_id=%s AND is_correct=1"
+        s_res = db_manager.execute_query(s_query, (uid, contest_id))
+        solved_ids = [str(r['question_id']) for r in s_res] if s_res else []
+
         return jsonify({
             'success': True,
             'level': current_state['level'] if current_state else 1,
+            'level_duration_minutes': level_duration,
             'violations': current_state['violation_count'] or 0 if current_state else 0,
             'solved': current_state['questions_solved'] if current_state else 0,
             'solved_ids': solved_ids,
@@ -688,21 +735,44 @@ def get_participant_state():
 
 @bp.route('/start-level', methods=['POST'])
 def start_level():
-    data = request.get_json()
-    user_id = data.get('user_id')
-    contest_id = data.get('contest_id', 1)
-    level = data.get('level')
-    
-    uid = user_id
-    if isinstance(user_id, str) and not user_id.isdigit():
-         u_res = db_manager.execute_query("SELECT user_id FROM users WHERE username=%s", (user_id,))
-         if u_res: uid = u_res[0]['user_id']
-    
-    db_manager.execute_update(
-        "UPDATE participant_level_stats SET start_time = NOW(), status = 'IN_PROGRESS' WHERE user_id=%s AND contest_id=%s AND level=%s AND (status='NOT_STARTED' OR status IS NULL)",
-        (uid, contest_id, level)
-    )
-    return jsonify({'success': True})
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No input data provided'}), 400
+            
+        user_id = data.get('user_id')
+        contest_id = data.get('contest_id', 1)
+        level = data.get('level')
+        
+        if not user_id or not level:
+            return jsonify({'error': 'Missing required fields (user_id/level)'}), 400
+        
+        # 1. Resolve User ID
+        uid = user_id
+        if isinstance(user_id, str) and not user_id.isdigit():
+             u_res = db_manager.execute_query("SELECT user_id FROM users WHERE username=%s", (user_id,))
+             if u_res: uid = u_res[0]['user_id']
+             else: return jsonify({'error': f'User {user_id} not found'}), 404
+        
+        # 2. Upsert Level Stats (Ensure Row Exists)
+        # We use INSERT IGNORE to ensure a row exists
+        db_manager.execute_update(
+            "INSERT IGNORE INTO participant_level_stats (user_id, contest_id, level, status, start_time) VALUES (%s, %s, %s, 'NOT_STARTED', NOW())",
+            (uid, contest_id, level)
+        )
+        
+        # 3. Update Status to IN_PROGRESS
+        # Only update if it's not already completed to avoid resetting completed levels
+        db_manager.execute_update(
+            "UPDATE participant_level_stats SET start_time = NOW(), status = 'IN_PROGRESS' WHERE user_id=%s AND contest_id=%s AND level=%s AND (status='NOT_STARTED' OR status IS NULL)",
+            (uid, contest_id, level)
+        )
+        
+        return jsonify({'success': True, 'level': level, 'status': 'IN_PROGRESS'})
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 @bp.route('/submit-level', methods=['POST'])
 def submit_level():
@@ -806,18 +876,43 @@ def advance_level(contest_id):
     socketio.emit('contest:level_start', {'contest_id': contest_id, 'wait_time': wait_time})
     return jsonify({'success': True})
 
-@bp.route('/<contest_id>/countdown', methods=['POST'])
+@bp.route('/<contest_id>/countdown', methods=['GET', 'POST'])
 @admin_required
 def toggle_countdown(contest_id):
-    # Toggle global countdown for this contest
     k = f"contest_{contest_id}_countdown"
-    res = db_manager.execute_query("SELECT value FROM admin_state WHERE key_name=%s", (k,))
-    curr = res[0]['value'] if res else 'stopped'
     
-    new_state = 'started' if curr != 'started' else 'stopped'
+    # Handle GET (Status Check)
+    if request.method == 'GET':
+        res = db_manager.execute_query("SELECT value FROM admin_state WHERE key_name=%s", (k,))
+        if res:
+            try: return jsonify(json.loads(res[0]['value']))
+            except: pass
+        return jsonify({'active': False})
+
+    # Handle POST (Toggle)
+    data = request.get_json()
+    action = data.get('action', 'start')
+    duration_mins = int(data.get('duration', 15))
+
+    new_state = {}
+    if action == 'start':
+        end_time = datetime.datetime.utcnow() + datetime.timedelta(minutes=duration_mins)
+        new_state = {
+            'active': True,
+            'start_time': datetime.datetime.utcnow().isoformat(),
+            'end_time': end_time.isoformat(),
+            'duration': duration_mins
+        }
+    else:
+        new_state = {'active': False}
+    
+    val_str = json.dumps(new_state)
     
     # Update DB
-    db_manager.execute_update("INSERT INTO admin_state (key_name, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s", (k, new_state, new_state))
+    db_manager.execute_update(
+        "INSERT INTO admin_state (key_name, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s", 
+        (k, val_str, val_str)
+    )
     
     from extensions import socketio
     socketio.emit('contest:countdown', {'contest_id': contest_id, 'state': new_state})

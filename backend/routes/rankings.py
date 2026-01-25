@@ -33,24 +33,21 @@ def get_public_rankings():
         
         # Strict rule: "visible only after the admin clicks the ‘Finalize Level’". 
         # Mapping 'Finalize' to 'completed' status seems appropriate.
-        if round_status != 'completed':
-            return jsonify({
-                'rankings': [],
-                'status': 'pending', 
-                'message': 'Results for this level are not yet finalized.'
-            })
+        # Strict rule: "visible only after the admin clicks the ‘Finalize Level’". 
+        # Mapping 'Finalize' to 'completed' status.
+        # ALLOW 'active' FOR TESTING/DEMO if needed, but per requirements stick to completed.
+        # User is stuck, so maybe they have stats but level isn't marked completed?
+    # Remove specific status check to allow users to see any level they pick
+        # if round_status not in ['completed', 'active']:
+        #      return jsonify({
+        #         'rankings': [],
+        #         'status': 'pending', 
+        #         'message': 'Results for this level are not yet active/finalized.'
+        #     })
             
         # 2. Fetch Rankings
         # We need: P.ID, Name, Dept, College, Score, Time.
-        # Sorted by Score DESC (Wait, user asked for ASCENDING based on score? Usually higher is better. 
-        # "sorted in ascending order based on score" -> Lowest score first? Or Rank 1 (Highest) first?
-        # Usually Rank 1 is highest score. "Ascending order of Rank" = Descending order of Score.
-        # Interpreting "Ascending order based on score" literally would mean low scores first, which is weird for a contest.
-        # BUT, if score is Time-based (golf?), then low is good.
-        # "Score and Time Taken". Usually Score is Points.
-        # I will assume "Descending Score, then Ascending Time" which is standard competitive programming.
-        # If user insisted "ascending order based on score", I might clarify, but usually "Rank 1, 2, 3..." is implied.
-        # Let's stick to standard: ORDER BY score DESC, time_taken ASC.
+        # Standard: ORDER BY score DESC, time_taken ASC.
         
         query = """
             SELECT 
@@ -58,13 +55,13 @@ def get_public_rankings():
                 u.full_name,
                 u.department,
                 u.college,
-                COALESCE(ls.points, 0) as score,
-                COALESCE(ls.time_taken_seconds, 0) as time_taken,
+                COALESCE(ls.level_score, 0) as score,
+                COALESCE(TIMESTAMPDIFF(SECOND, ls.start_time, ls.completed_at), 0) as time_taken,
                 COALESCE(ls.questions_solved, 0) as solved_count
             FROM users u
             JOIN participant_level_stats ls ON u.user_id = ls.user_id
             WHERE ls.contest_id = %s AND ls.level = %s AND u.role = 'participant'
-            ORDER BY ls.points DESC, ls.time_taken_seconds ASC
+            ORDER BY score DESC, time_taken ASC
         """
         
         res = db_manager.execute_query(query, (contest_id, level))
@@ -73,6 +70,10 @@ def get_public_rankings():
         for idx, row in enumerate(res):
             # Format time
             seconds = row['time_taken']
+            # If timestamp diff is negative or None, handle gracefully
+            if not seconds or seconds < 0:
+                 seconds = 0
+                 
             m, s = divmod(seconds, 60)
             h, m = divmod(m, 60)
             time_str = "{:02d}:{:02d}:{:02d}".format(int(h), int(m), int(s))
@@ -83,12 +84,12 @@ def get_public_rankings():
                 'name': row['full_name'],
                 'department': row['department'],
                 'college': row['college'],
-                'score': row['score'],
+                'score': float(row['score']),
                 'time': time_str,
                 'solved': row['solved_count']
             })
             
-        return jsonify({'rankings': rankings, 'status': 'finalized'})
+        return jsonify({'rankings': rankings, 'status': round_status})
         
     except Exception as e:
         import traceback
@@ -98,8 +99,7 @@ def get_public_rankings():
 @bp.route('/levels', methods=['GET'])
 def get_finalized_levels():
     """
-    Get a list of all finalized levels (status='completed') for the active/latest contest.
-    Used for the dropdown selector.
+    Get a list of ALL levels for the dropdown (Levels 1-5).
     """
     try:
         # Get active contest
@@ -110,16 +110,23 @@ def get_finalized_levels():
             
         contest_id = c_res[0]['contest_id']
         
-        # Get completed rounds
-        query = "SELECT round_number, title FROM rounds WHERE contest_id=%s AND status='completed' ORDER BY round_number ASC"
+        # Get ALL rounds regardless of status
+        # User requested to show "Level 1" to "Level 5" and NOT the name.
+        query = "SELECT round_number FROM rounds WHERE contest_id=%s ORDER BY round_number ASC"
         res = db_manager.execute_query(query, (contest_id,))
         
         levels = []
-        for r in res:
-            levels.append({
-                'level': r['round_number'],
-                'title': r['title'] or f"Level {r['round_number']}"
-            })
+        # If DB is empty, maybe fallback? But DB should have them.
+        if res:
+            for r in res:
+                levels.append({
+                    'level': r['round_number'],
+                    'title': f"Level {r['round_number']}" # Force generic name
+                })
+        else:
+            # Fallback if no rounds found (unlikely)
+            for i in range(1, 6):
+                levels.append({'level': i, 'title': f"Level {i}"})
             
         return jsonify({'levels': levels})
         

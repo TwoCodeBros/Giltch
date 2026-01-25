@@ -373,6 +373,12 @@
                         this.roundsMap = res.rounds_map || {}; // Sync Rounds
                         this.isEliminated = res.is_eliminated || false;
 
+                        // Timer Setup
+                        if (res.start_time) {
+                            this.levelStartTime = new Date(res.start_time);
+                            this.levelDuration = res.level_duration_minutes || 45;
+                            this.startTimer();
+                        }
 
                         this.solvedQuestions = new Set(res.solved_ids || []);
 
@@ -405,6 +411,58 @@
                 } catch (e) {
                     console.error("Fetch State Error", e);
                 }
+            },
+
+            startTimer() {
+                if (this.timerInterval) clearInterval(this.timerInterval);
+
+                const update = () => {
+                    if (!this.levelStartTime) {
+                        const timerEl = document.getElementById('contest-timer');
+                        if (timerEl) {
+                            timerEl.innerText = "Error"; // Fallback for invalid levelStartTime
+                            timerEl.classList.add('danger');
+                        }
+                        return;
+                    }
+
+                    const now = new Date(); // Browser Local Time
+
+                    // Server sends ISO string (e.g., 2026-01-24T23:00:00). 
+                    // If it has 'Z' it is UTC. If not, browser assumes local.
+                    // Our backend usually sends naive datetime or UTC without Z in database -> isoformat.
+                    // Let's assume the server text is UTC. Appending 'Z' fixes most naive string issues.
+                    let startT = new Date(this.levelStartTime);
+                    if (this.levelStartTime.toString().indexOf('Z') === -1) {
+                        // Force UTC interpretation if missing timezone info (common flask issue)
+                        startT = new Date(this.levelStartTime + 'Z');
+                    }
+
+                    const endsAt = new Date(startT.getTime() + this.levelDuration * 60000);
+
+                    const diff = endsAt - now;
+
+                    const timerEl = document.getElementById('contest-timer');
+                    if (!timerEl) return;
+
+                    if (diff <= 0) {
+                        timerEl.innerText = "00:00:00";
+                        timerEl.classList.add('danger');
+                        return;
+                    }
+
+                    // Format
+                    const h = Math.floor(diff / 3600000);
+                    const m = Math.floor((diff % 3600000) / 60000);
+                    const s = Math.floor((diff % 60000) / 1000);
+
+                    timerEl.innerText = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+
+                    if (diff < 300000) timerEl.classList.add('warning');
+                };
+
+                update();
+                this.timerInterval = setInterval(update, 1000);
             },
 
             handleElimination() {
@@ -474,6 +532,9 @@
                 // 4. Global Activation (Admin overrides Local Lock)
                 if (gStatus === 'active') return 'ACTIVE';
                 if (gStatus === 'paused') return 'PAUSED';
+
+                // Force Level 1 Open if ambiguous
+                if (level === 1 && (gStatus === 'pending' || !gStatus)) return 'ACTIVE';
 
                 // 5. Default
                 return 'LOCKED';
@@ -853,9 +914,10 @@
             },
 
             handleEditorStateUpdates(res) {
-                // Check if active session was killed/timed out?
-                if (res.status === 'COMPLETED') {
+                // Only force exit if the level we are currently PLAYING is marked as COMPLETED/TERMINATED
+                if (res.level === this.currentLevel && res.status === 'COMPLETED') {
                     alert("Level Ended by System");
+                    if (window.Proctoring) window.Proctoring.stop();
                     this.showView('selection');
                 }
             },

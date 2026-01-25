@@ -62,13 +62,23 @@ window.Proctoring = {
     lastViolationTime: 0,
     levelActive: false, // Only monitor when level is actually playing
 
+    lastInteractionTime: 0,
+
     bindEvents() {
+        // Track valid interactions to prevent false positives
+        window.addEventListener('mousedown', () => {
+            this.lastInteractionTime = Date.now();
+        });
+        window.addEventListener('keydown', () => {
+            this.lastInteractionTime = Date.now();
+        });
+
         // 1. Tab Switch (Visibility Change)
         document.addEventListener('visibilitychange', () => {
             if (this.levelActive || this.strictLockActive) {
                 if (document.hidden) {
                     this.recordViolation('TAB_SWITCH', true, 'Tab switched or minimized');
-                    this.showOverlay('Tab switching is bad! Return immediately.');
+                    this.showOverlay('You have left the contest window.', 'Tab Switch Detected!');
                 } else {
                     // Returned to tab -> Force Fullscreen
                     this.enterFullscreen();
@@ -82,6 +92,9 @@ window.Proctoring = {
                 // Ignore if inside editor iframe or interaction
                 if (document.activeElement && document.activeElement.tagName === 'IFRAME') return;
 
+                // Ignore if recent interaction (click/key within 300ms) - likely internal UI
+                if (Date.now() - this.lastInteractionTime < 300) return;
+
                 // Ignore if recent screenshot (suppress double count)
                 if (this.ignoreBlur) return;
 
@@ -89,7 +102,7 @@ window.Proctoring = {
                     // Confirm focus is actually lost (debounce)
                     if (!document.hasFocus() && (this.levelActive || this.strictLockActive)) {
                         this.recordViolation('FOCUS_LOST', true, 'Window lost focus');
-                        this.showOverlay('Focus lost! Click to return.');
+                        this.showOverlay('Focus lost! Click to return.', 'Focus Lost!');
                     }
                 }, 500);
             }
@@ -106,7 +119,7 @@ window.Proctoring = {
         document.addEventListener('fullscreenchange', () => {
             if (!document.fullscreenElement && (this.levelActive || this.strictLockActive)) {
                 this.recordViolation('FULLSCREEN_EXIT', true, 'Exited fullscreen mode');
-                this.showOverlay('FULLSCREEN REQUIRED! Click button to return.');
+                this.showOverlay('FULLSCREEN REQUIRED! Click button to return.', 'Security Alert');
             }
         });
 
@@ -238,12 +251,15 @@ window.Proctoring = {
         }
     },
 
-    showOverlay(message) {
+    showOverlay(message, title = "Security Alert") {
         if (!this.levelActive && !this.strictLockActive) return;
         const overlay = document.getElementById('proctor-overlay');
         const msgElem = overlay ? overlay.querySelector('p') : null;
+        const titleElem = overlay ? overlay.querySelector('h2') : null;
+
         if (overlay) {
             if (msgElem && message) msgElem.textContent = message;
+            if (titleElem && title) titleElem.textContent = title;
             overlay.style.display = 'flex';
         }
     },
@@ -263,7 +279,7 @@ window.Proctoring = {
             if ((this.levelActive || this.strictLockActive) && !document.fullscreenElement) {
                 const overlay = document.getElementById('proctor-overlay');
                 if (!overlay || overlay.style.display === 'none') {
-                    this.showOverlay('Fullscreen is MANDATORY.');
+                    this.showOverlay('Fullscreen is MANDATORY.', 'Security Alert');
                 }
             }
         }, 2000);

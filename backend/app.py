@@ -30,6 +30,9 @@ def create_app(config_class=Config):
     from routes.rankings import bp as rankings_bp
     app.register_blueprint(rankings_bp, url_prefix='/api/rankings')
 
+    from routes.participant import bp as participant_bp
+    app.register_blueprint(participant_bp, url_prefix='/api/participant')
+
     # Serve Static Files
     @app.route('/')
     def serve_index():
@@ -58,6 +61,36 @@ def create_app(config_class=Config):
     @app.route('/leader_dashboard.html')
     def serve_leader_dashboard():
         return app.send_static_file('leader_dashboard.html')
+        
+    @app.route('/favicon.ico')
+    def favicon():
+        return '', 204
+
+    @app.errorhandler(Exception)
+    def handle_global_error(e):
+        from flask import request
+        from werkzeug.exceptions import HTTPException
+        
+        # Determine status code
+        code = 500
+        if isinstance(e, HTTPException):
+            code = e.code
+
+        # API Requests -> JSON
+        if request.path.startswith('/api/'):
+            # Only log stack trace for 500s
+            if code >= 500:
+                import traceback
+                traceback.print_exc()
+            return jsonify({'error': str(e), 'success': False}), code
+
+        # Static/Page Requests -> HTML (default behavior)
+        if isinstance(e, HTTPException):
+            return e
+            
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'message': 'Internal Server Error'}), 500
 
     @app.route('/api/health')
     def health_check():
@@ -67,5 +100,5 @@ def create_app(config_class=Config):
 
 if __name__ == '__main__':
     app = create_app()
-    socketio.run(app, debug=app.config['DEBUG'], host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
     # Database configuration updated to debug_marathon_v3 - Force Reload

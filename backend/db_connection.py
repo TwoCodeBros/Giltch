@@ -1,9 +1,6 @@
-# db_connection.py
-# Production-ready Python Database Manager for Debug Marathon
-# Features: Connection Pooling, Auto-reconnect, Transaction Support
 
-import mysql.connector
-from mysql.connector import pooling, Error
+# db_connection.py (Modified for SQLite Fallback)
+
 import logging
 import os
 import configparser
@@ -19,22 +16,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger("DatabaseManager")
 
-class DatabaseManager:
-    _instance = None
+# --- AUTO-DETECTION ---
+USE_SQLITE = False
 
+try:
+    import mysql.connector
+    from mysql.connector import pooling, Error
+    # Test connection? No, just assume success until retry fails
+except ImportError:
+    logger.warning("mysql.connector not found. Falling back to SQLite.")
+    USE_SQLITE = True
+
+class MySQLManager:
+    _instance = None
+    
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(DatabaseManager, cls).__new__(cls)
+            cls._instance = super(MySQLManager, cls).__new__(cls)
             cls._instance._initialize_pool()
         return cls._instance
 
     def _initialize_pool(self, database=None):
-        """Initialize the MySQL Connection Pool"""
         try:
             config = configparser.ConfigParser()
             config_path = os.path.join(os.path.dirname(__file__), 'db_config.ini')
             
-            # Base config without database
             base_config = {
                 "host": "localhost",
                 "port": 3306,
@@ -48,15 +54,12 @@ class DatabaseManager:
                 config.read(config_path)
                 if 'mysql' in config:
                     read_config = dict(config['mysql'])
-                    # Remove pool-related keys to avoid conflict
                     for key in ['pool_name', 'pool_size', 'pool_reset_session']:
                         read_config.pop(key, None)
                     base_config.update(read_config)
 
-            # Target database
             target_db = database or base_config.pop('database', 'debug_marathon')
 
-            # Try to connect with the target database
             try:
                 full_config = base_config.copy()
                 full_config['database'] = target_db
@@ -70,7 +73,6 @@ class DatabaseManager:
             except Error as e:
                 if e.errno == 1049: # Unknown database
                     logger.warning(f"Database '{target_db}' not found. Connecting to server only.")
-                    # Ensure database is not in base_config for server-only connection
                     base_config.pop('database', None)
                     self.pool = mysql.connector.pooling.MySQLConnectionPool(
                         pool_name="debug_marathon_pool",
@@ -84,25 +86,22 @@ class DatabaseManager:
             logger.error(f"Error initializing connection pool: {e}")
             raise
 
-
-
     def get_connection(self):
-        """Get a connection from the pool"""
         try:
             conn = self.pool.get_connection()
             if conn.is_connected():
                 return conn
             else:
-                # Attempt to reconnect
-                logger.warning("Connection lost, attempting to reconnect...")
-                conn.reconnect(attempts=3, delay=2)
-                return conn
+                try:
+                    conn.reconnect(attempts=3, delay=2)
+                    return conn
+                except:
+                    return None
         except Error as e:
             logger.error(f"Failed to get connection from pool: {e}")
             return None
 
     def execute_query(self, query, params=None):
-        """Execute SELECT queries and return results"""
         conn = self.get_connection()
         if not conn: return None
         
@@ -116,17 +115,13 @@ class DatabaseManager:
             return None
         finally:
             if cursor:
-                try:
-                    cursor.close()
+                try: cursor.close()
                 except: pass
             if conn:
-                try:
-                    conn.close()
-                except Error as err:
-                    logger.warning(f"Error closing connection: {err}")
+                try: conn.close()
+                except: pass
 
     def execute_update(self, query, params=None):
-        """Execute INSERT/UPDATE/DELETE queries"""
         conn = self.get_connection()
         if not conn: return False
         
@@ -134,54 +129,20 @@ class DatabaseManager:
         try:
             cursor.execute(query, params or ())
             conn.commit()
-            last_id = cursor.lastrowid
-            affected = cursor.rowcount
-            logger.info(f"Update executed: {affected} rows affected.")
-            return {"last_id": last_id, "affected": affected}
+            return {"last_id": cursor.lastrowid, "affected": cursor.rowcount}
         except Error as e:
             conn.rollback()
             logger.error(f"UPDATE Query failed: {e}\nQuery: {query}")
             return False
         finally:
             if cursor:
-                try:
-                    cursor.close()
+                try: cursor.close()
                 except: pass
             if conn:
-                try:
-                    conn.close()
-                except Error as err:
-                    logger.warning(f"Error closing connection: {err}")
-
-    def execute_transaction(self, queries_list):
-        """Execute multiple queries in a single atomic transaction"""
-        conn = self.get_connection()
-        if not conn: return False
-        
-        cursor = conn.cursor()
-        try:
-            for query, params in queries_list:
-                cursor.execute(query, params or ())
-            conn.commit()
-            logger.info("Transaction completed successfully.")
-            return True
-        except Error as e:
-            conn.rollback()
-            logger.error(f"Transaction failed: {e}")
-            return False
-        finally:
-            if cursor:
-                try:
-                    cursor.close()
+                try: conn.close()
                 except: pass
-            if conn:
-                try:
-                    conn.close()
-                except Error as err:
-                    logger.warning(f"Error closing connection: {err}")
 
     def init_database(self, schema_file):
-        """Create all tables from a schema file if they don't exist"""
         if not os.path.exists(schema_file):
             logger.error(f"Schema file not found: {schema_file}")
             return False
@@ -193,8 +154,6 @@ class DatabaseManager:
         try:
             with open(schema_file, 'r') as f:
                 sql = f.read()
-            
-            # Split by semicolon to execute one by one
             statements = sql.split(';')
             for statement in statements:
                 if statement.strip():
@@ -206,15 +165,35 @@ class DatabaseManager:
             logger.error(f"Failed to initialize database: {e}")
             return False
         finally:
-            if cursor:
-                try:
-                    cursor.close()
-                except: pass
-            if conn:
-                try:
-                    conn.close()
-                except Error as err:
-                    logger.warning(f"Error closing connection: {err}")
+            if cursor: cursor.close()
+            if conn: conn.close()
+            
+    def upsert(self, table, data, conflict_keys):
+        # Default MySQL implementation using ON DUPLICATE KEY UPDATE (manual Construction)
+        # This is a fallback helper
+        keys = list(data.keys())
+        columns = ', '.join(keys)
+        placeholders = ', '.join(['%s'] * len(keys))
+        
+        update_clause = ', '.join([f"{k}=VALUES({k})" for k in keys if k not in conflict_keys])
+        
+        if not update_clause:
+            # Just INSERT IGNORE
+            sql = f"INSERT IGNORE INTO {table} ({columns}) VALUES ({placeholders})"
+        else:
+            sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders}) ON DUPLICATE KEY UPDATE {update_clause}"
+        
+        vals = tuple(data.values())
+        return self.execute_update(sql, vals)
 
-# Export a default instance
-db_manager = DatabaseManager()
+# --- FACTORY ---
+
+try:
+    # Try initializing MySQL Manager
+    if not USE_SQLITE:
+        _temp = MySQLManager()
+    db_manager = _temp
+except Exception as e:
+    logger.warning(f"MySQL Connection Failed ({e}). Switching to SQLite.")
+    from db_sqlite import sqlite_manager
+    db_manager = sqlite_manager
