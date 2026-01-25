@@ -52,132 +52,92 @@ def calculate_risk_level(total_violations):
     if total_violations > 2: return 'medium'
     return 'low'
 
-def update_participant_aggregates(participant_id, contest_id, violation_points, violation_col=None, level=1):
+def update_participant_aggregates(participant_id, user_db_id, contest_id, violation_points, violation_col=None, level=1):
     """
     Update participant_proctoring table with strict category incrementing.
-    violation_col: specific column to increment (e.g. 'tab_switches')
-    Enforces rules LEVEL-WISE (resetting limits per level).
+    Now accepts user_db_id as required int/string ID to avoid re-lookup failures.
     """
     db = get_db()
     
-    # 1. Get Current State
+    # 1. Get Current State (Fresh Read)
     try:
+        # Check if record exists
         res = db.table('participant_proctoring').select("*").eq("participant_id", participant_id).eq("contest_id", contest_id).execute()
         
+        state = {}
         if not res.data:
-            # Create initial record
-            current = {
+            # Create fresh
+            state = {
                 'id': str(uuid.uuid4()),
+                'user_id': user_db_id, # Ensure we link user_id if column exists
                 'participant_id': participant_id,
                 'contest_id': contest_id,
                 'total_violations': 0,
                 'violation_score': 0,
-                'extra_violations': 0,
                 'risk_level': 'low',
                 'is_disqualified': False,
                 'created_at': get_current_time(),
                 'tab_switches': 0,
                 'copy_attempts': 0,
                 'screenshot_attempts': 0,
-                'focus_losses': 0
+                'focus_losses': 0,
+                'extra_violations': 0,
+                'updated_at': get_current_time()
             }
-            db.table('participant_proctoring').insert(current).execute()
-            state = current
+            # Attempt insert
+            try:
+                db.table('participant_proctoring').insert(state).execute()
+            except Exception as e:
+                # Race condition handling: if insert fails, assume exists and re-read
+                print(f"Insert race caught: {e}")
+                res = db.table('participant_proctoring').select("*").eq("participant_id", participant_id).eq("contest_id", contest_id).execute()
+                if res.data: state = res.data[0]
         else:
             state = res.data[0]
 
-        # 2. Get Config
+        # 2. Config
         config = get_config(contest_id)
         
-        # Helper to safely get current counter value
-        def get_stat(key):
-            val = state.get(key)
-            if val is None: return 0
-            try: return int(val)
-            except: return 0
-
-        # 3. Calculate New Values (Global Stats still accumulate)
-        new_total_global = get_stat('total_violations') + 1
-        new_score = get_stat('violation_score') + violation_points
+        # 3. Calculate New Values
+        # Note: We do "Read-Modify-Write". 
+        current_total = int(state.get('total_violations') or 0)
+        current_score = int(state.get('violation_score') or 0)
         
-        # Level-Wise Violation Count Calculation
-        # We need to count violations for THIS level to enforce the limit
-        # Since the current violation hasn't been inserted into 'violations' table yet (it's done after this function in original code),
-        # we calculate existing + 1.
-        # However, checking the DB is safer. But existing code inserts into violations AFTER this function.
-        # So we query count, then add 1.
+        new_total = current_total + 1
+        new_score = current_score + violation_points
         
-        # NOTE: db.table('violations') query might be slow if many violations. 
-        # Ideally we should have 'participant_level_stats' tracking violations per level.
-        # For now, we query.
-        
-        level_violations = 1 # Start with current one
-        try:
-             # Need to find user_id for the query? 'participant_id' in violations is 'user_id' (INT) or 'participant_id' string?
-             # The schema says 'user_id' (INT). But this function takes 'participant_id' (Username string).
-             # We need to resolve user_id presumably, OR 'violations' table uses user_id.
-             # In report_violation, we resolve user_id.
-             pass 
-        except: 
-             pass
-
-        # To avoid resolving user_id again here, let's rely on the caller or just count from 'violations' if we can.
-        # Given we don't have user_id here easily without query, and 'participant_proctoring' uses 'participant_id' (username).
-        # Let's fallback to Global enforcement if we can't easily filter, OR simpler:
-        # Just use Global Total for now but mention we want level wise?
-        # No, "Change it level wise" implies we MUST do it.
-        # The 'violations' table has 'level'. 
-        
-        # Strategy: Query 'violations' table for this level.
-        # issue: we need user_id for violations table. 'participant_id' param here is username. 
-        # We'll do a quick lookup.
-        u_res = db.table('users').select('user_id').eq('username', participant_id).execute()
-        if u_res.data:
-            uid = u_res.data[0]['user_id']
-            # Count violations for this level
-            # Note: The current violation is NOT in table yet.
-            v_res = db.execute_query(
-                "SELECT COUNT(*) as cnt FROM violations WHERE user_id=%s AND contest_id=%s AND level=%s", 
-                (uid, contest_id, level)
-            )
-            existing_level_count = v_res[0]['cnt'] if v_res else 0
-            level_violations = existing_level_count + 1
-        else:
-            level_violations = new_total_global # Fallback
-            
-        
-        # Risk Level (Based on Level Violations now? Or Global? usually Global Risk is better for Dashboard)
-        # Let's keep Risk Level Global for admin visibility, but Disqualification Level-Wise.
-        risk = calculate_risk_level(new_total_global) 
-        
-        # 4. Prepare Update Data
-        update_data = {
-            'total_violations': new_total_global,
-            'violation_score': new_score,
-            'last_violation_at': get_current_time(),
-            'updated_at': get_current_time()
-        }
-        
-        # Increment Specific Column
+        # Update specific column text
+        col_update = {}
         if violation_col:
-            valid_cols = ['tab_switches', 'copy_attempts', 'screenshot_attempts', 'focus_losses']
-            if violation_col in valid_cols:
-                update_data[violation_col] = get_stat(violation_col) + 1
+             current_val = int(state.get(violation_col) or 0)
+             col_update[violation_col] = current_val + 1
         
-        # 5. Auto Disqualify Check (LEVEL WISE)
+        # 4. Level-Wise Count (Robust Query)
+        # Count existing violations in 'violations' table for this level + 1 (the current one)
+        v_res = db.execute_query(
+            "SELECT COUNT(*) as cnt FROM violations WHERE user_id=%s AND contest_id=%s AND level=%s", 
+            (user_db_id, contest_id, level)
+        )
+        existing_level_count = v_res[0]['cnt'] if v_res else 0
+        level_violations = existing_level_count + 1
+        
+        # 5. Risk & Disqualification Logic
+        risk = calculate_risk_level(new_total)
         is_disqualified = bool(state.get('is_disqualified', False))
         disq_reason = state.get('disqualification_reason')
         disq_at = state.get('disqualified_at')
         
-        max_allowed = config.get('max_violations', 10) + get_stat('extra_violations')
+        extra = int(state.get('extra_violations') or 0)
+        max_allowed = config.get('max_violations', 10) + extra
         
+        # Auto-DQ Logic (Trigger only if not already DQ'd)
         if config.get('auto_disqualify') and level_violations > max_allowed and not is_disqualified:
             is_disqualified = True
             risk = 'critical'
-            disq_reason = f'Auto: Exceeded max violations for Level {level}'
+            disq_reason = f'Auto: Exceeded max violations ({max_allowed}) for Level {level}'
             disq_at = get_current_time()
             
-            # Emit Disqualified Event
+            # Emit Socket Event
             try:
                 from extensions import socketio
                 socketio.emit('proctoring:disqualified', {
@@ -187,22 +147,30 @@ def update_participant_aggregates(participant_id, contest_id, violation_points, 
                 })
             except: pass
 
-        # Update DB
-        update_data['risk_level'] = risk
-        update_data['is_disqualified'] = is_disqualified
+        # 6. Execute Update
+        # Prepare payload
+        update_payload = {
+            'total_violations': new_total,
+            'violation_score': new_score,
+            'risk_level': risk,
+            'is_disqualified': is_disqualified,
+            'last_violation_at': get_current_time(),
+            'updated_at': get_current_time()
+        }
         if is_disqualified:
-            update_data['disqualification_reason'] = disq_reason
-            update_data['disqualified_at'] = disq_at
+            update_payload['disqualification_reason'] = disq_reason
+            update_payload['disqualified_at'] = disq_at
+            
+        # Merge column update
+        update_payload.update(col_update)
         
-        db.table('participant_proctoring').update(update_data).eq("participant_id", participant_id).eq("contest_id", contest_id).execute()
+        db.table('participant_proctoring').update(update_payload).eq("participant_id", participant_id).eq("contest_id", contest_id).execute()
         
-        return {**state, **update_data, 'level_violations': level_violations}
+        return {**state, **update_payload, 'level_violations': level_violations}
         
     except Exception as e:
-        print(f"Error in update_participant_aggregates: {e}")
-        import traceback
-        traceback.print_exc()
-        raise e
+        print(f"Error updating proctoring aggregates: {e}")
+        return {} # Safe fallback
 
 # ==================== CONFIG ROUTES ====================
 
@@ -243,9 +211,7 @@ def update_proctoring_config(contest_id):
 @bp.route('/violation', methods=['POST'])
 def report_violation():
     """
-    Logic to receive a violation, lookup the contest penalty weights, 
-    update the individual log, increment the participant's total_violations, 
-    and calculate if they should be auto_disqualified.
+    Logic to receive a violation, check thresholds, update DB, and notify admin.
     """
     data = request.get_json()
     participant_id_input = data.get('participant_id') 
@@ -258,24 +224,28 @@ def report_violation():
     db = get_db()
     
     try:
-        # 1. Resolve User ID
+        # 1. Resolve User ID (Crucial step)
         user_id = None
         username = participant_id_input
         
-        u_res = db.execute_query("SELECT user_id, username FROM users WHERE username=%s OR user_id=%s", (username, username))
+        # Try finding by username first (exact match)
+        u_res = db.execute_query("SELECT user_id, username FROM users WHERE username=%s", (username,))
+        # If not, try by user_id string
+        if not u_res:
+             u_res = db.execute_query("SELECT user_id, username FROM users WHERE user_id=%s", (username,))
+             
         if u_res:
              user_id = u_res[0]['user_id']
-             username = u_res[0]['username'] 
-        
-        if not user_id:
+             username = u_res[0]['username'] # Normalize case
+        else:
             return jsonify({'error': 'User not found'}), 404
 
-        # 2. Get Config & Weights
+        # 2. Check Config
         config = get_config(contest_id)
         if not config.get('enabled', True):
              return jsonify({'success': True, 'ignored': True})
 
-        # Weights Map
+        # 3. Map Violation to Weights and Columns
         weights = {
             'TAB_SWITCH': config.get('tab_switch_penalty', 1),
             'COPY_ATTEMPT': config.get('copy_paste_penalty', 2),
@@ -283,50 +253,51 @@ def report_violation():
             'CUT_ATTEMPT': config.get('copy_paste_penalty', 2),
             'SCREENSHOT_ATTEMPT': config.get('screenshot_penalty', 3),
             'FOCUS_LOST': config.get('focus_loss_penalty', 1),
-            # Backwards compatibility
-            'copy': config.get('copy_paste_penalty', 2), 
-            'paste': config.get('copy_paste_penalty', 2),
-            'cut': config.get('copy_paste_penalty', 2),
-            'unknown': 1
+            # Keys from frontend might vary
+            'RIGHT_CLICK': 0 # Usually no penalty or low
         }
         
-        points = weights.get(violation_type, 1) # Default to 1
-        if points == 1 and violation_type.upper() in weights:
-             points = weights[violation_type.upper()]
+        # Normalize Input
+        vt_norm = str(violation_type).upper().strip()
+        points = weights.get(vt_norm, 1)
         
-        # 3. Update Aggregate Stats with explicit mapping
-        # violation_type comes from frontend e.g. 'TAB_SWITCH' or 'COPY_ATTEMPT'
-        
+        # Column Mapping
         mapping_col = None
-        vt_upper = str(violation_type).upper().strip()
+        if 'TAB' in vt_norm: mapping_col = 'tab_switches'
+        elif any(x in vt_norm for x in ['COPY', 'PASTE', 'CUT']): mapping_col = 'copy_attempts'
+        elif 'SCREEN' in vt_norm: mapping_col = 'screenshot_attempts'
+        elif 'FOCUS' in vt_norm: mapping_col = 'focus_losses'
         
-        if 'TAB' in vt_upper: mapping_col = 'tab_switches'
-        elif any(x in vt_upper for x in ['COPY', 'PASTE', 'CUT']): mapping_col = 'copy_attempts'
-        elif 'SCREEN' in vt_upper: mapping_col = 'screenshot_attempts'
-        elif 'FOCUS' in vt_upper: mapping_col = 'focus_losses'
-        
-        # We pass this decided column to the updater
-        # Extract level from data, default to 1.
+        # 4. Update Aggregates (Returns new state)
         current_level = data.get('level', 1) 
         try: current_level = int(current_level)
         except: current_level = 1
 
-        updated_state = update_participant_aggregates(username, contest_id, points, mapping_col, level=current_level)
+        updated_state = update_participant_aggregates(
+            participant_id=username, 
+            user_db_id=user_id,
+            contest_id=contest_id, 
+            violation_points=points, 
+            violation_col=mapping_col, 
+            level=current_level
+        )
         
-        # 4. Log Individual Violation
+        # 5. Log Individual Violation
         violation_log = {
             'user_id': user_id,
             'contest_id': contest_id,
-            'violation_type': violation_type,
+            'violation_type': vt_norm,
             'penalty_points': points,
-            'description': data.get('description', f'Detected {violation_type}'),
+            'description': data.get('description', f'Detected {vt_norm}'),
             'timestamp': get_current_time(),
-            'round_id': data.get('round_id'),
-            'level': current_level, # Added level
+            'round_id': data.get('round_id'), # Optional
+            'level': current_level,
             'question_id': data.get('question_id'),
-            'severity': updated_state['risk_level']
+            'severity': updated_state.get('risk_level', 'low')
         }
-        violation_log['severity'] = 'critical' if points >= 3 else ('medium' if points >= 2 else 'low')
+        # Refine severity for the individual log
+        if points >= 3: violation_log['severity'] = 'critical'
+        elif points >= 2: violation_log['severity'] = 'medium'
         
         db.table('violations').insert(violation_log).execute()
         
@@ -336,18 +307,18 @@ def report_violation():
             socketio.emit('proctoring:violation', {
                 'participant_id': username,
                 'contest_id': contest_id,
-                'violation_type': violation_type,
-                'total_violations': updated_state['total_violations'],
-                'risk_level': updated_state['risk_level'],
-                'is_disqualified': updated_state['is_disqualified']
+                'violation_type': vt_norm,
+                'total_violations': updated_state.get('total_violations', 0),
+                'risk_level': updated_state.get('risk_level', 'low'),
+                'is_disqualified': updated_state.get('is_disqualified', False)
             })
         except: pass
 
         return jsonify({
             'success': True,
-            'total_violations': updated_state['total_violations'],
-            'risk_level': updated_state['risk_level'],
-            'is_disqualified': updated_state['is_disqualified']
+            'total_violations': updated_state.get('total_violations', 0),
+            'risk_level': updated_state.get('risk_level', 'low'),
+            'is_disqualified': updated_state.get('is_disqualified', False)
         })
 
     except Exception as e:

@@ -30,13 +30,13 @@ def get_stats():
 @admin_required
 def get_participants():
     from db_connection import db_manager
-    # Fetch participants with total score
+    # Fetch participants with detailed info
     query = """
-        SELECT u.user_id, u.username, u.full_name, u.status, COALESCE(SUM(s.score_awarded), 0) as score
+        SELECT u.user_id, u.username, u.full_name, u.email, u.college, u.department, u.status, COALESCE(SUM(s.score_awarded), 0) as score
         FROM users u
         LEFT JOIN submissions s ON u.user_id = s.user_id
         WHERE u.role = 'participant'
-        GROUP BY u.user_id, u.username, u.full_name, u.status
+        GROUP BY u.user_id, u.username, u.full_name, u.email, u.college, u.department, u.status
         ORDER BY score DESC
     """
     res = db_manager.execute_query(query)
@@ -44,9 +44,13 @@ def get_participants():
     participants = []
     for r in res:
         participants.append({
-            'id': r['username'], # Frontend expects username as ID string
+            'id': r['username'], 
             'participant_id': r['username'],
             'name': r['full_name'] or r['username'],
+            'email': r.get('email'),
+            'phone': r.get('phone', ''),
+            'college': r.get('college'),
+            'department': r.get('department'),
             'status': r['status'],
             'score': float(r['score'])
         })
@@ -58,27 +62,73 @@ def get_participants():
 def create_participant():
     db = get_db()
     data = request.get_json()
+    from db_connection import db_manager
     
-    # Map to 'users' table schema
-    username = data.get('participant_id') or f"PART{str(uuid.uuid4())[:4].upper()}"
+    # 1. Determine ID
+    pid = data.get('participant_id')
+    manual_mode = False
+    
+    if pid and str(pid).strip():
+        # Excel Import or Manual Override
+        username = str(pid).strip()
+    else:
+        # Auto-Generate Mode: SHCCSGF001 pattern
+        # Find latest ID
+        q = "SELECT username FROM users WHERE username LIKE 'SHCCSGF%' ORDER BY length(username) DESC, username DESC LIMIT 1"
+        res = db_manager.execute_query(q)
+        last_id = res[0]['username'] if res else "SHCCSGF000"
+        
+        try:
+            # Extract number
+            num_part = int(last_id.replace("SHCCSGF", ""))
+            new_num = num_part + 1
+        except:
+            new_num = 1
+            
+        username = f"SHCCSGF{new_num:03d}"
+        manual_mode = True
+
     full_name = data.get('name', 'Unknown')
     
     new_user = {
         'username': username,
-        'email': f"{username}@example.com", # Placeholder
-        'password_hash': 'sha256_placeholder', # Real apps would need a password or random gen
+        'email': data.get('email') or f"{username}@example.com", 
+        'password_hash': 'sha256_placeholder', 
         'full_name': full_name,
+        'college': data.get('college'),
+        'department': data.get('department'),
+        'phone': data.get('phone'),
         'role': 'participant',
         'status': 'active'
     }
     
-    db.table('users').insert(new_user).execute()
-    # Return matched format for frontend
-    new_user['id'] = username # Mock ID for immediate return
-    new_user['participant_id'] = username
-    new_user['name'] = full_name
-    
-    return jsonify({'success': True, 'participant': new_user})
+    try:
+        # Check duplication
+        chk = db_manager.execute_query("SELECT user_id FROM users WHERE username=%s", (username,))
+        if chk:
+            if manual_mode:
+                # If auto-gen collided (rare), try one more time? Or fail.
+                return jsonify({'error': 'System generated duplicate ID. Please try again.'}), 409
+            else:
+                return jsonify({'error': f"Participant ID '{username}' already exists."}), 409
+
+        # Insert - Using explicit query to ensure columns are hit (and to avoid table object limitations if cols missing in schema def)
+        # Note: If college/dept cols don't exist in DB, this will fail. We should ideally ensure they exist.
+        # But 'db.table().insert()' usually handles mapped schema. Let's use db_manager for safety.
+        
+        cols = ['username', 'email', 'password_hash', 'full_name', 'role', 'status', 'college', 'department']
+        vals = [new_user[c] for c in cols]
+        placeholders = ', '.join(['%s'] * len(cols))
+        col_str = ', '.join(cols)
+        
+        insert_q = f"INSERT INTO users ({col_str}) VALUES ({placeholders})"
+        db_manager.execute_update(insert_q, tuple(vals))
+        
+        return jsonify({'success': True, 'participant': new_user})
+        
+    except Exception as e:
+        print(f"Create Part Error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @bp.route('/participants/<pid>', methods=['DELETE'])
 @admin_required

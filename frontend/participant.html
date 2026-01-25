@@ -165,6 +165,10 @@
 
             <div style="display: flex; align-items: center; gap: var(--space-4);">
                 <div class="violation-badge" id="violation-count">0 Violations</div>
+                <button class="btn btn-secondary" onclick="Contest.toggleFullscreen()" title="Toggle Fullscreen"
+                    style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+                    <i class="fa-solid fa-expand"></i>
+                </button>
                 <button class="btn btn-secondary"
                     onclick="if(confirm('Exit contest?')) { Storage.remove('session'); window.location.href='index.html'; }"
                     style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">Exit</button>
@@ -500,6 +504,19 @@
                 }
             },
 
+            toggleFullscreen() {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(err => {
+                        console.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+                        Toast.show("Fullscreen blocked by browser. Click page first.", "error");
+                    });
+                } else {
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen();
+                    }
+                }
+            },
+
             renderLevelSelection() {
                 const grid = document.getElementById('level-selection-grid');
                 if (!grid) return;
@@ -592,29 +609,104 @@
 
 
             async handleLevelClick(level) {
-                // "When a participant clicks a level card, the system must first check whether the admin has started that level."
-
-                // Refresh state to be sure
-                await this.fetchAndApplyState();
-
                 const status = this.resolveLevelStatus(level);
 
-                if (status === 'ACTIVE') {
-                    // "Redirect directly to the editor... all questions unlocked"
-                    this.enterLevel(level);
-                } else if (status === 'WAITING' || status === 'PAUSED') {
-                    // "Show a notification card saying 'This level is not started yet...'"
-                    this.showGlobalOverlay('Wait for Admin', 'This level is not started yet, please wait for admin\'s command.', 'fa-lock', false);
-                    setTimeout(() => this.hideGlobalOverlay(), 2000);
-                } else if (status === 'COMPLETED') {
-                    Toast.show("You have completed this level.", 'success');
-                } else {
-                    Toast.show("Level Locked.", 'error');
+                if (status === 'COMPLETED') {
+                    Toast.show("Level already completed!", "success");
+                    return;
                 }
+                if (status === 'LOCKED') {
+                    Toast.show("Complete previous levels to unlock.", "error");
+                    return;
+                }
+                if (status === 'PAUSED') {
+                    Toast.show("Level paused by Admin.", "warning");
+                    return;
+                }
+
+                if (status === 'ACTIVE' || status === 'WAITING' || status === 'PENDING') {
+                    this.currentLevel = level;
+
+                    // Resume if already in progress
+                    if (this.currentLevel === this.userMaxLevel && this.userStatus === 'IN_PROGRESS') {
+                        this.toggleFullscreen();
+                        this.enterLevel(level);
+                    } else {
+                        const overlay = document.getElementById('level-start-overlay');
+                        if (overlay) overlay.style.display = 'flex';
+                    }
+                }
+            },
+
+            async startLevel() {
+                try {
+                    const res = await API.request('/contest/start-level', 'POST', {
+                        user_id: this.user.participant_id,
+                        contest_id: this.activeContestId,
+                        level: this.currentLevel
+                    });
+
+                    if (res && res.success) {
+                        document.getElementById('level-start-overlay').style.display = 'none';
+
+                        // Fullscreen
+                        this.toggleFullscreen();
+
+                        // Proctoring
+                        this.isProctoringActive = true;
+                        if (window.Proctoring) window.Proctoring.reset();
+
+                        // Update State
+                        if (res.start_time) this.levelStartTime = new Date(res.start_time);
+                        this.levelDuration = res.level_duration_minutes || 45;
+                        this.startTimer();
+
+                        this.enterLevel(this.currentLevel);
+                        this.bindProctoringEvents();
+
+                    } else {
+                        Toast.show(res.error || "Failed to start", "error");
+                    }
+                } catch (e) {
+                    console.error(e);
+                    Toast.show("Error starting level", "error");
+                }
+            },
+
+            bindProctoringEvents() {
+                if (this._eventsBound) return;
+                this._eventsBound = true;
+
+                const violationHandler = (type) => {
+                    if (!this.isProctoringActive || this.isEliminated) return;
+                    if (window.Proctoring) window.Proctoring.reportViolation(type);
+                };
+
+                document.addEventListener('visibilitychange', () => {
+                    if (document.hidden) violationHandler('tab_switch');
+                });
+                window.addEventListener('blur', () => violationHandler('focus_lost'));
+                document.addEventListener('fullscreenchange', () => {
+                    if (!document.fullscreenElement && this.isProctoringActive) violationHandler('fullscreen_exit');
+                });
+                window.onbeforeunload = (e) => {
+                    if (this.isProctoringActive) {
+                        e.preventDefault();
+                        return "Contest";
+                    }
+                };
             },
 
             enterLevel(level) {
                 this.currentLevel = level;
+
+                // Update Sidebar UI
+                const lbl = document.getElementById('current-level-display');
+                if (lbl) lbl.innerText = `Level ${level}`;
+
+                // Update Roadmap
+                this.updateRoadmapUI();
+
                 // Switch View
                 this.showView('editor');
                 if (window.CodeEditor && CodeEditor.editor) {
@@ -622,17 +714,54 @@
                 }
 
                 // Load Questions
+                this.currentQId = 0;
                 this.loadQuestionsForLevel();
-                // If not "IN_PROGRESS" on backend, strictly we should call start-level?
-                // The Logic "If Admin Started -> Redirect to editor to begin".
-                // If the user hasn't "Started" (start_time set), we should call startLevel.
-                if (this.userStatus === 'NOT_STARTED') {
-                    this.showGlobalOverlay('Ready?', `Level ${level} is live.`, 'fa-play', true);
-                } else {
-                    // Resume
-                    this.resumeLevel();
+            },
+
+            updateRoadmapUI() {
+                // Logic: 
+                // Levels < userMaxLevel are completed (GREEN)
+                // Level == userMaxLevel is Active (BLUE)
+                // Levels > userMaxLevel are Locked (GRAY)
+                // However, we also need to handle 'currentLevel' (the one being viewed). output:
+
+                const maxUnlocked = this.userMaxLevel || 1;
+
+                for (let i = 1; i <= 5; i++) {
+                    const badge = document.getElementById(`level-${i}`);
+                    if (!badge) continue;
+
+                    // Reset
+                    badge.className = 'level-badge';
+                    badge.style = '';
+
+                    // 1. Completed
+                    if (i < maxUnlocked) {
+                        badge.classList.add('completed');
+                        badge.style.background = '#10b981';
+                        badge.style.color = 'white';
+                        badge.innerHTML = `Lvl ${i} <i class="fa-solid fa-check" style="margin-left:4px; font-size:0.7em;"></i>`;
+                    }
+                    // 2. Unlocked / Active
+                    else if (i === maxUnlocked) {
+                        badge.classList.add('active');
+                        badge.style.background = 'var(--primary-600)';
+                        badge.style.color = 'white';
+                        badge.innerHTML = `Lvl ${i}`;
+                    }
+                    // 3. Locked
+                    else {
+                        badge.classList.add('locked');
+                    }
+
+                    // Visual cue for "Currently Viewing" if viewing a previous level
+                    if (i === this.currentLevel && i !== maxUnlocked) {
+                        badge.style.border = '2px solid var(--primary-600)';
+                    }
                 }
             },
+
+
 
             showView(viewName) {
                 const login = document.getElementById('login-section');
@@ -657,18 +786,99 @@
                 window.location.reload();
             },
 
-            // --- Editor Logic from previous implementation ---
+            async runCode() {
+                const code = CodeEditor.editor.getValue();
+                const q = this.questions[this.currentQId];
+                if (!q) return;
 
-            async syncContestState() {
+                document.getElementById('console-output').innerHTML = '<span style="color:blue"><i class="fa-solid fa-spinner fa-spin"></i> Running code...</span>';
+
                 try {
-                    const data = await API.request('/contest');
-                    const active = (data.contests || []).find(c => c.status === 'live');
-                    if (active) {
-                        this.activeContestId = active.id;
-                        const statusData = await API.request(`/contest/${this.activeContestId}/status`);
-                        this.serverOffset = (new Date(statusData.server_time).getTime()) - Date.now();
+                    const res = await API.request('/contest/run', 'POST', {
+                        code: code,
+                        language: this.allowedLanguage || 'python',
+                        question_id: q.id,
+                        user_id: this.user.participant_id,
+                        contest_id: this.activeContestId,
+                        level: this.currentLevel
+                    });
+
+                    if (res && res.test_results) {
+                        this.renderTestResults(res.test_results);
+                        // Show raw output of first case if available for debugging
+                        const execTime = document.getElementById('exec-time');
+                        if (execTime) execTime.innerText = "Done";
+                    } else {
+                        document.getElementById('console-output').innerHTML = `<span style="color:red">${res.error || 'Execution Error'}</span>`;
                     }
-                } catch (e) { console.error("Sync Failed", e); }
+                } catch (e) {
+                    document.getElementById('console-output').innerHTML = `<span style="color:red">Network/Server Error: ${e.message}</span>`;
+                }
+            },
+
+            async handleToolbarSubmit() {
+                if (!confirm("Submit final solution for this question?")) return;
+
+                const code = CodeEditor.editor.getValue();
+                const q = this.questions[this.currentQId];
+
+                try {
+                    // Disable button
+                    const btn = document.getElementById('btn-submit');
+                    if (btn) btn.disabled = true;
+
+                    const res = await API.request('/contest/submit-question', 'POST', {
+                        code: code,
+                        language: this.allowedLanguage || 'python',
+                        question_id: q.id,
+                        user_id: this.user.participant_id,
+                        contest_id: this.activeContestId,
+                        level: this.currentLevel
+                    });
+
+                    if (res.success) {
+                        Toast.show("Solution Submitted Successfully!", "success");
+                        this.solvedQuestions.add(String(q.id));
+                        this.solvedQuestions.add(q.id); // both types
+                        this.renderTabs();
+                        // Refresh stats
+                        this.fetchAndApplyState();
+                    } else {
+                        Toast.show("Test Cases Failed. Please fix and retry.", "error");
+                        this.renderTestResults(res.test_results || [], true);
+                    }
+                    if (btn) btn.disabled = false;
+                } catch (e) {
+                    Toast.show("Submission Error: " + e.message, "error");
+                    const btn = document.getElementById('btn-submit');
+                    if (btn) btn.disabled = false;
+                }
+            },
+
+            renderTestResults(results, isSubmit = false) {
+                const outDiv = document.getElementById('console-output');
+                if (!results || !results.length) {
+                    outDiv.innerHTML = "No results returned.";
+                    return;
+                }
+
+                let html = isSubmit ? '<h4>Submission Results</h4>' : '<h4>Run Results</h4>';
+                results.forEach((r, i) => {
+                    html += `
+                        <div style="margin-bottom:8px; border-bottom:1px solid #eee; padding-bottom:4px;">
+                            <div style="display:flex; justify-content:space-between;">
+                                <strong>Case ${i + 1}:</strong> 
+                                <span class="badge badge-${r.passed ? 'success' : 'danger'}">${r.passed ? 'Passed' : 'Failed'}</span>
+                            </div>
+                            <div style="font-family:monospace; font-size:0.85em; margin-top:4px; background:#f8fafc; padding:4px;">
+                                ${!r.passed ? `<span style="color:#d97706">Expected: ${r.expected.substring(0, 50)}...</span><br>` : ''}
+                                <span style="color:${r.passed ? 'green' : 'red'}">Output: ${r.output.substring(0, 100)}</span>
+                                ${r.error ? `<br><span style="color:red">Error: ${r.error}</span>` : ''}
+                            </div>
+                        </div>
+                     `;
+                });
+                outDiv.innerHTML = html;
             },
 
             initSocketIO() {
@@ -700,13 +910,19 @@
                     this.log(`Fetching: ${url}`);
 
                     const data = await API.request(url);
-                    // this.log(`Data: ${JSON.stringify(data)}`); // Reduced log spam
 
-                    if (!data || !data.questions) {
-                        throw new Error("Invalid API response format");
+                    // Robust: Handle missing data or questions array errors
+                    if (!data) throw new Error("No response from server");
+
+                    this.questions = data.questions || [];
+                    this.allowedLanguage = data.allowed_language || 'python';
+
+                    // Update Language Badge
+                    const langBadge = document.getElementById('lang-display');
+                    if (langBadge) {
+                        const labelMap = { 'python': 'Python 3', 'javascript': 'Node.js', 'c': 'C (GCC)', 'cpp': 'C++ (G++)', 'java': 'Java' };
+                        langBadge.innerText = labelMap[this.allowedLanguage] || this.allowedLanguage;
                     }
-
-                    this.questions = data.questions;
 
                     if (this.questions.length === 0) {
                         tabsContainer.innerHTML = `
@@ -716,24 +932,40 @@
                                 <button class="btn btn-sm btn-primary" onclick="Contest.loadQuestionsForLevel()" style="margin-top:10px;">Retry</button>
                             </div>
                         `;
-                        if (window.CodeEditor && CodeEditor.editor) CodeEditor.editor.setValue("# Valid questions not found.\n# Please contact admin if this persists.", -1);
+                        if (window.CodeEditor && CodeEditor.editor) CodeEditor.editor.setValue(`# No questions loaded for Level ${this.currentLevel}.\n# Please contact the admin.`, -1);
                         return;
                     }
 
-                    // Render Tabs
+                    // Success
                     this.renderTabs();
 
-                    // Select First Question automatically if none selected, or refresh current
                     let targetIdx = 0;
                     if (this.currentQId && this.currentQId < this.questions.length) targetIdx = this.currentQId;
-
                     this.switchQuestion(targetIdx);
+
                     document.querySelector('.editor-panel').style.opacity = '1';
+
+                    // Sync Roadmap if function exists
+                    if (typeof this.updateRoadmapUI === 'function') {
+                        this.updateRoadmapUI();
+                    }
 
                 } catch (e) {
                     this.log(`Error: ${e.message}`);
                     console.error(e);
-                    tabsContainer.innerHTML = `<div style="color:red; padding:10px;">Error loading questions: ${e.message}<br><button class="btn btn-sm btn-secondary" onclick="Contest.loadQuestionsForLevel()">Retry</button></div>`;
+
+                    // Auto-Retry Logic (max 2 times)
+                    let retryCount = arguments[0] || 0;
+                    if (retryCount < 2) {
+                        console.log(`Retrying loadQuestions (${retryCount + 1}/2)...`);
+                        setTimeout(() => this.loadQuestionsForLevel(retryCount + 1), 1500);
+                        return;
+                    }
+
+                    tabsContainer.innerHTML = `<div style="color:red; padding:10px;">
+                        Error loading questions: ${e.message || "Unknown error"}<br>
+                        <button class="btn btn-sm btn-secondary" onclick="Contest.loadQuestionsForLevel()">Retry Now</button>
+                    </div>`;
                 }
             },
 
@@ -765,78 +997,42 @@
                 this.renderTabs();
                 const q = this.questions[idx];
                 if (!q) return;
-                // const titleEl = document.getElementById('q-title');
-                // if(titleEl) titleEl.textContent = q.title;
 
-                // Boilerplate
-                const bp = (q.boilerplate && q.boilerplate.python) ? q.boilerplate.python : (q.buggy_code || "");
+                // Set Code / Boilerplate based on allowed language
+                // Note: backend 'boilerplate' object might only contain what we sent (e.g. {python: ...}) or data.boilerplate might be just string (old legacy)
+                // We normalized it in get_questions to be dict or string.
+
+                let bp = "";
+                const lang = this.allowedLanguage || 'python';
+
+                if (q.boilerplate) {
+                    if (typeof q.boilerplate === 'string') bp = q.boilerplate;
+                    else bp = q.boilerplate[lang] || q.boilerplate['python'] || "";
+                } else {
+                    bp = q.buggy_code || "";
+                }
+
                 CodeEditor.editor.setValue(bp, -1);
+
+                // Set Mode
+                const modeMap = {
+                    'python': 'ace/mode/python',
+                    'javascript': 'ace/mode/javascript',
+                    'c': 'ace/mode/c_cpp',
+                    'cpp': 'ace/mode/c_cpp',
+                    'java': 'ace/mode/java'
+                };
+                CodeEditor.editor.session.setMode(modeMap[lang] || 'ace/mode/text');
 
                 // Samples
                 const tcBox = document.querySelector('.test-cases-box');
-                const samples = q.test_cases ? q.test_cases.slice(0, 2) : [];
+                const samples = (q.test_cases && Array.isArray(q.test_cases)) ? q.test_cases.slice(0, 2) : [];
                 tcBox.innerHTML = samples.length ? '<h4>Samples</h4>' + samples.map(tc => `<div class="sample-case">In: ${tc.input}<br>Out: ${tc.expected}</div>`).join('') : '';
 
                 this.updateToolbar();
             },
 
-            async runCode() {
-                const code = CodeEditor.getValue();
-                const q = this.questions[this.currentQId];
-                const out = document.getElementById('console-output');
-                out.innerHTML = '<span style="color:#3b82f6">Running...</span>';
 
-                try {
-                    const res = await API.request('/contest/run', 'POST', {
-                        code, language: 'python', question_id: q.id,
-                        user_id: this.user.participant_id, contest_id: this.activeContestId, level: this.currentLevel
-                    });
-                    if (res.test_results) {
-                        out.innerHTML = res.test_results.map((r, i) =>
-                            `<div class="${r.passed ? 'console-success' : 'console-error'}">Case ${i + 1}: ${r.passed ? 'PASS' : 'FAIL'} ` +
-                            `<small>(${r.input} -> ${r.output})</small></div>`
-                        ).join('');
-                    } else {
-                        out.innerHTML = `Error: ${res.error || 'Unknown'}`;
-                    }
-                } catch (e) { out.innerHTML = "Network Error"; }
-            },
-
-            async handleToolbarSubmit() {
-                // If last question -> Master Submit logic check
-                if (this.currentQId === this.questions.length - 1) {
-                    this.submitLevel(false, 'Finish Level?', 'Confirm final submission?');
-                } else {
-                    this.submitQuestion();
-                }
-            },
-
-            async submitQuestion() {
-                const q = this.questions[this.currentQId];
-                if (this.solvedQuestions.has(q.id)) return Toast.show('Already Solved', 'info');
-
-                const out = document.getElementById('console-output');
-                out.innerHTML = '<span style="color:blue">Submitting...</span>';
-
-                try {
-                    const res = await API.request('/contest/submit-question', 'POST', {
-                        user_id: this.user.participant_id, contest_id: this.activeContestId,
-                        question_id: q.id, code: CodeEditor.getValue(), language: 'python', level: this.currentLevel
-                    });
-
-                    if (res.success) {
-                        Toast.show(`Correct!`, 'success');
-                        out.innerHTML = '<div class="console-success">ACCEPTED</div>';
-                        this.solvedQuestions.add(q.id);
-                        this.renderTabs();
-                        if (this.currentQId < this.questions.length - 1) setTimeout(() => this.switchQuestion(this.currentQId + 1), 1000);
-                        else this.updateToolbar();
-                    } else {
-                        Toast.show('Wrong Answer', 'error');
-                        out.innerHTML = '<div class="console-error">Wrong Answer</div>';
-                    }
-                } catch (e) { out.innerHTML = 'Error'; }
-            },
 
             updateToolbar() {
                 const btn = document.getElementById('btn-submit');
@@ -863,8 +1059,8 @@
                     await API.request('/contest/submit-level', 'POST', {
                         user_id: this.user.participant_id, contest_id: this.activeContestId, level: this.currentLevel
                     });
+                    this.isProctoringActive = false;
                     if (window.Proctoring) window.Proctoring.stop();
-                    // "Redirect back to Level Selection page"
                     this.showView('selection');
                     this.fetchAndApplyState();
                 } catch (e) { alert('Error submitting'); }
@@ -884,42 +1080,33 @@
                     btn.onclick = () => this.startLevel();
                 } else if (btn) btn.style.display = 'none';
             },
+
             hideGlobalOverlay() {
-                document.getElementById('level-start-overlay').style.display = 'none';
-            },
-
-            async startLevel() {
-                this.hideGlobalOverlay();
-                // Fullscreen
-                try {
-                    const e = document.documentElement;
-                    if (e.requestFullscreen) await e.requestFullscreen();
-                } catch (err) { }
-
-                // API Call
-                await API.request('/contest/start-level', 'POST', {
-                    user_id: this.user.participant_id, level: this.currentLevel, contest_id: this.activeContestId
-                });
-
-                // Resume
-                this.resumeLevel();
-                this.fetchAndApplyState();
-            },
-
-            resumeLevel() {
-                if (window.Proctoring) {
-                    window.Proctoring.levelActive = true;
-                    window.Proctoring.enableStrictLock();
-                }
+                const ov = document.getElementById('level-start-overlay');
+                if (ov) ov.style.display = 'none';
             },
 
             handleEditorStateUpdates(res) {
-                // Only force exit if the level we are currently PLAYING is marked as COMPLETED/TERMINATED
                 if (res.level === this.currentLevel && res.status === 'COMPLETED') {
                     alert("Level Ended by System");
+                    this.isProctoringActive = false;
                     if (window.Proctoring) window.Proctoring.stop();
                     this.showView('selection');
                 }
+            },
+
+            async syncContestState() {
+                try {
+                    const data = await API.request('/contest');
+                    const active = (data.contests || []).find(c => c.status === 'live');
+                    if (active) {
+                        this.activeContestId = active.id;
+                        try {
+                            const statusData = await API.request(`/contest/${this.activeContestId}/status`);
+                            this.serverOffset = (new Date(statusData.server_time).getTime()) - Date.now();
+                        } catch (e) { }
+                    }
+                } catch (e) { console.error("Sync Failed", e); }
             },
 
             // Stub methods if called by other files

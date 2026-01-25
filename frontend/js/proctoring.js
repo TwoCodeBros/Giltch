@@ -66,14 +66,18 @@ window.Proctoring = {
 
     bindEvents() {
         // Track valid interactions to prevent false positives
+        // USE CAPTURE to detect clicks even if stopPropagation is called (e.g. by buttons/editors)
         window.addEventListener('mousedown', () => {
             this.lastInteractionTime = Date.now();
-        });
+        }, true);
         window.addEventListener('keydown', () => {
             this.lastInteractionTime = Date.now();
-        });
+        }, true);
+        window.addEventListener('click', () => {
+            this.lastInteractionTime = Date.now();
+        }, true);
 
-        // 1. Tab Switch (Visibility Change)
+        // 1. Tab Switch (Visibility Change) - The ONLY trigger for "Tab Switch" violation
         document.addEventListener('visibilitychange', () => {
             if (this.levelActive || this.strictLockActive) {
                 if (document.hidden) {
@@ -86,25 +90,35 @@ window.Proctoring = {
             }
         });
 
-        // 2. Window Blur (Focus Lost)
+        // 2. Window Blur (Focus Loss) - STRICTLY for clicking outside the window
         window.addEventListener('blur', () => {
             if (this.levelActive || this.strictLockActive) {
-                // Ignore if inside editor iframe or interaction
-                if (document.activeElement && document.activeElement.tagName === 'IFRAME') return;
 
-                // Ignore if recent interaction (click/key within 300ms) - likely internal UI
-                if (Date.now() - this.lastInteractionTime < 300) return;
+                // IGNORES:
+                // 1. If we hold focus (e.g. clicked an iframe)
+                if (document.activeElement && (document.activeElement.tagName === 'IFRAME' || document.activeElement.tagName === 'BODY')) {
+                    // Verify if it's actually an iframe or just body (which happens on window blur too)
+                    // If it's an iframe, we assume user is editing code.
+                    if (document.activeElement.tagName === 'IFRAME') return;
+                }
 
-                // Ignore if recent screenshot (suppress double count)
+                // 2. Recent Interaction Grace Period (Increased to 1s)
+                // This covers button clicks where focus might briefly shift or events bubble late
+                if (Date.now() - this.lastInteractionTime < 1000) return;
+
+                // 3. Explicit Ignore Flag
                 if (this.ignoreBlur) return;
 
                 setTimeout(() => {
-                    // Confirm focus is actually lost (debounce)
-                    if (!document.hasFocus() && (this.levelActive || this.strictLockActive)) {
+                    // Double Check: Did we regain focus immediately? (False positive check)
+                    if (document.hasFocus()) return;
+
+                    // Double Check: Is the level still active?
+                    if (this.levelActive || this.strictLockActive) {
                         this.recordViolation('FOCUS_LOST', true, 'Window lost focus');
                         this.showOverlay('Focus lost! Click to return.', 'Focus Lost!');
                     }
-                }, 500);
+                }, 1000); // 1-second debounce (generous)
             }
         });
 
@@ -112,6 +126,9 @@ window.Proctoring = {
         window.addEventListener('focus', () => {
             if ((this.levelActive || this.strictLockActive) && !document.fullscreenElement) {
                 this.enterFullscreen();
+                // We don't dismiss overlay automatically for genuine violations usually, 
+                // but for focus loss it's better UX to just require a click (which triggers focus).
+                // Proctoring.dismissOverlay() is called by the button.
             }
         });
 

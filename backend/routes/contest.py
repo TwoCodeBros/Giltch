@@ -50,6 +50,22 @@ def create_contest():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@bp.route('/<contest_id>', methods=['GET'])
+@admin_required
+def get_contest_detail(contest_id):
+    query = "SELECT contest_id as id, contest_name as title, description, start_datetime, end_datetime, status FROM contests WHERE contest_id=%s"
+    res = db_manager.execute_query(query, (contest_id,))
+    
+    if not res:
+        return jsonify({'error': 'Contest not found'}), 404
+        
+    contest = res[0]
+    # Format dates
+    if contest['start_datetime']: contest['start_time'] = contest['start_datetime'].isoformat() # admin.js expects start_time
+    if contest['end_datetime']: contest['end_time'] = contest['end_datetime'].isoformat()
+    
+    return jsonify({'contest': contest})
+
 @bp.route('/<contest_id>', methods=['PUT'])
 @admin_required
 def update_contest(contest_id):
@@ -214,11 +230,18 @@ def complete_level_admin(contest_id, level_number):
 def update_round(contest_id, round_number):
     data = request.get_json()
     time_limit = data.get('time_limit')
+    allowed_language = data.get('allowed_language') # NEW
     
     if time_limit is not None:
         db_manager.execute_update(
             "UPDATE rounds SET time_limit_minutes=%s WHERE contest_id=%s AND round_number=%s",
             (time_limit, contest_id, round_number)
+        )
+
+    if allowed_language: # NEW
+        db_manager.execute_update(
+            "UPDATE rounds SET allowed_language=%s WHERE contest_id=%s AND round_number=%s",
+            (allowed_language, contest_id, round_number)
         )
     
     # Handle Question Reordering
@@ -238,8 +261,8 @@ def update_round(contest_id, round_number):
 def create_round_question(contest_id, round_number):
     data = request.get_json()
     
-    # 1. Get Round ID
-    r_query = "SELECT round_id FROM rounds WHERE contest_id=%s AND round_number=%s"
+    # 1. Get Round ID and Allowed Language
+    r_query = "SELECT round_id, allowed_language FROM rounds WHERE contest_id=%s AND round_number=%s"
     r_res = db_manager.execute_query(r_query, (contest_id, round_number))
     if not r_res:
         return jsonify({'error': 'Round not found'}), 404
@@ -256,7 +279,10 @@ def create_round_question(contest_id, round_number):
     points = data.get('points', 10)
     test_cases = json.dumps(data.get('test_cases', []))
     difficulty = data.get('difficulty', 'Level 1')
-    language = data.get('language', 'python')
+    
+    # Use config language if available for boilerplate selection, fallback to 'python'
+    language = r_res[0].get('allowed_language') or data.get('language', 'python')
+    
     time_limit = data.get('time_limit', 20)
     
     # Helper: Update Level Duration if provided
@@ -367,7 +393,7 @@ def get_questions():
             contest_id = 1
 
     query = """
-        SELECT q.*, r.round_number, r.time_limit_minutes 
+        SELECT q.*, r.round_number, r.time_limit_minutes, r.allowed_language 
         FROM questions q
         JOIN rounds r ON q.round_id = r.round_id
         WHERE r.contest_id = %s AND r.round_number = %s
@@ -379,7 +405,10 @@ def get_questions():
     res = db_manager.execute_query(query, (contest_id, level))
     
     questions = []
+    allowed_lang = 'python' # Default
+    
     for q in res:
+        if q.get('allowed_language'): allowed_lang = q['allowed_language']
         # Construct useful object for frontend
         tcs = []
         try:
@@ -400,13 +429,13 @@ def get_questions():
             'time_limit_minutes': q['time_limit_minutes']
         })
         
-    return jsonify({'questions': questions})
+    return jsonify({'questions': questions, 'allowed_language': allowed_lang})
 
 @bp.route('/run', methods=['POST'])
 def run_code():
     data = request.get_json()
     code = data.get('code')
-    language = data.get('language', 'python')
+    requested_language = data.get('language', 'python')
     question_id = data.get('question_id')
     user_id = data.get('user_id')
     contest_id = data.get('contest_id', 1) 
@@ -418,24 +447,30 @@ def run_code():
 
     print(f"RUN CODE: Fetching Question ID: {question_id} (Type: {type(question_id)})")
 
-    # 1. Fetch Question details (Inputs)
-    try:
-        qid = int(question_id)
-    except:
-        qid = question_id
+    # 1. Fetch Question & Config
+    try: qid = int(question_id)
+    except: qid = question_id
 
-    query = "SELECT test_input, expected_output, test_cases FROM questions WHERE question_id=%s"
+    # Join with rounds to get allowed_language
+    query = """
+        SELECT q.test_input, q.expected_output, q.test_cases, r.allowed_language
+        FROM questions q
+        LEFT JOIN rounds r ON q.round_id = r.round_id
+        WHERE q.question_id = %s
+    """
     q_res = db_manager.execute_query(query, (qid,))
     
     if not q_res:
         print(f"RUN CODE WARN: Question ID {qid} NOT FOUND. Defaulting to Playground Mode.")
-        # User requested: "showing only output of the program"
-        # We will create a dummy question context so they can see their code run
-        question = {'test_input': '', 'expected_output': '', 'test_cases': '[]'}
+        question = {'test_input': '', 'expected_output': '', 'test_cases': '[]', 'allowed_language': 'python'}
     else:
         question = q_res[0]
+
+    # Enforce Allowed Language
+    allowed = question.get('allowed_language') or 'python'
+    language = allowed # Force usage of configured language
     
-    # Determine input/expected (Priority: Explicit Cols -> JSON)
+    # 2. Determine input/expected (Inputs)
     inputs = []
     if question.get('test_input') is not None:
         inputs.append({
@@ -768,6 +803,10 @@ def start_level():
             (uid, contest_id, level)
         )
         
+        from extensions import socketio
+        socketio.emit('admin:stats_update', {'contest_id': contest_id})
+        socketio.emit('participant:level_start', {'user_id': uid, 'level': level, 'contest_id': contest_id})
+        
         return jsonify({'success': True, 'level': level, 'status': 'IN_PROGRESS'})
         
     except Exception as e:
@@ -795,6 +834,10 @@ def submit_level():
         "UPDATE participant_level_stats SET status='COMPLETED' WHERE user_id=%s AND contest_id=%s AND level=%s", 
         (uid, contest_id, level)
     )
+    
+    from extensions import socketio
+    socketio.emit('admin:stats_update', {'contest_id': contest_id})
+    socketio.emit('participant:level_complete', {'user_id': uid, 'level': level, 'contest_id': contest_id})
     
     # 2. DO NOT Unlock Next Level automatically (Wait for Admin Shortlist)
     # The next level row will be created by 'get_participant_state' once the user is Shortlisted.

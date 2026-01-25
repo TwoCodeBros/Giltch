@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 from utils.db import get_db
 import datetime
+from extensions import socketio
 
 bp = Blueprint('participant_routes', __name__)
 
@@ -97,6 +98,10 @@ def unlock_level_logic(data):
             "UPDATE participant_level_stats SET status='IN_PROGRESS' WHERE user_id=%s AND contest_id=%s AND level=%s AND (status='NOT_STARTED' OR status IS NULL)",
             (user_id, contest_id, level)
         )
+        
+        # Notify Admin
+        socketio.emit('admin:stats_update', {'contest_id': contest_id})
+        socketio.emit('participant:started_level', {'participant_id': participant_id, 'level': level, 'contest_id': contest_id})
         
         return jsonify({'success': True, 'level': level, 'status': 'active'})
         

@@ -49,18 +49,41 @@ const Admin = {
         // Listen for contest events
         this.socket.on('contest:started', (data) => {
             console.log('Contest started:', data);
-            this.showNotification(`Contest "${data.title}" has started!`, 'success');
-            if (this.currentView === 'dashboard') this.updateDashboardStats();
+            this.showNotification(`Contest "${data.title || 'Marathon'}" has started!`, 'success');
+            if (this.currentView === 'dashboard') this.loadDashboard();
         });
 
         this.socket.on('contest:paused', (data) => {
             console.log('Contest paused:', data);
             this.showNotification('Contest has been paused', 'warning');
+            if (this.currentView === 'dashboard') this.loadDashboard();
         });
 
         this.socket.on('contest:ended', (data) => {
             console.log('Contest ended:', data);
             this.showNotification('Contest has ended', 'info');
+            if (this.currentView === 'dashboard') this.loadDashboard();
+        });
+
+        // Level Status Events
+        this.socket.on('contest:updated', (data) => {
+            console.log('Contest updated:', data);
+            if (this.currentView === 'dashboard') this.loadDashboard();
+        });
+
+        this.socket.on('level:activated', (data) => {
+            this.showNotification(`Level ${data.level} Live!`, 'success');
+            if (this.currentView === 'dashboard') this.loadDashboard();
+        });
+
+        this.socket.on('level:completed', (data) => {
+            this.showNotification(`Level ${data.level} Completed`, 'success');
+            if (this.currentView === 'dashboard') this.loadDashboard();
+        });
+
+        this.socket.on('level:paused', (data) => {
+            this.showNotification(`Level ${data.level} Paused`, 'warning');
+            if (this.currentView === 'dashboard') this.loadDashboard();
         });
 
         this.socket.on('participant:joined', (data) => {
@@ -69,8 +92,23 @@ const Admin = {
         });
 
         this.socket.on('participant:submitted', (data) => {
-            this.addActivityFeedItem(`${data.name} submitted solution for ${data.question}`, 'submit');
-            // Trigger stats update
+            this.addActivityFeedItem(`${data.name || data.participant_id} submitted solution for ${data.question}`, 'submit');
+            this.updateDashboardStats();
+        });
+
+        // New Participant Level Events
+        this.socket.on('participant:started_level', (data) => {
+            this.addActivityFeedItem(`${data.participant_id} started Level ${data.level}`, 'join');
+            this.updateDashboardStats();
+        });
+
+        this.socket.on('participant:level_start', (data) => {
+            // Redundant handler if name differs, catching both
+            this.updateDashboardStats();
+        });
+
+        this.socket.on('participant:level_complete', (data) => {
+            this.addActivityFeedItem(`${data.user_id} completed Level ${data.level}`, 'success');
             this.updateDashboardStats();
         });
 
@@ -89,8 +127,13 @@ const Admin = {
             this.updateDashboardStats(); // Update violations counter
             // Also refresh proctoring view if active
             if (this.currentView === 'proctoring') {
-                this.refreshProctoringData();
+                this.refreshProctoringData(); // Assumed function if viewing proctoring
             }
+        });
+
+        this.socket.on('proctoring:disqualified', (data) => {
+            this.addActivityFeedItem(`${data.participant_id} DISQUALIFIED: ${data.reason}`, 'violation');
+            this.updateDashboardStats();
         });
     },
 
@@ -355,10 +398,15 @@ const Admin = {
                                 <div class="list-item" data-id="${r.id}" onclick="Admin.loadRoundDetail('${contestId}', '${r.id}')" style="background:white; padding:1rem; margin-bottom:0.5rem; border-radius:8px; border:1px solid #eee; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
                                     <div>
                                         <strong>${r.title}</strong><br>
-                                        <small>${r.time_limit} mins</small>
+                                        <small class="text-secondary"><i class="fa-regular fa-clock"></i> ${r.time_limit} mins &bull; <i class="fa-solid fa-code"></i> ${r.allowed_language || 'python'}</small>
                                     </div>
-                                    <div>
-                                        <button class="btn-icon" onclick="event.stopPropagation(); Admin.deleteRound('${contestId}', '${r.id}')"><i class="fa-solid fa-trash" style="color:red"></i></button>
+                                    <div style="display:flex; gap:5px;">
+                                        <button class="btn-icon" title="Configure Round" onclick="event.stopPropagation(); Admin.editRoundSettings('${contestId}', '${r.id}', '${r.round_number || r.id.replace('level_', '')}', '${r.time_limit}', '${r.allowed_language || 'python'}')">
+                                            <i class="fa-solid fa-cog" style="color:var(--primary-600)"></i>
+                                        </button>
+                                        <button class="btn-icon" title="Delete Round" onclick="event.stopPropagation(); Admin.deleteRound('${contestId}', '${r.id}')">
+                                            <i class="fa-solid fa-trash" style="color:var(--danger)"></i>
+                                        </button>
                                     </div>
                                 </div>
                             `).join('')}
@@ -407,6 +455,58 @@ const Admin = {
         if (confirm("Delete this round?")) {
             await API.request(`/contest/${contestId}/rounds/${roundId}`, 'DELETE');
             this.loadContestDetail(contestId);
+        }
+    },
+
+    editRoundSettings(contestId, roundId, roundNum, duration, lang) {
+        // Create Modal for Round Configuration
+        const modalHtml = `
+            <div class="modal-overlay" id="round-edit-modal" style="display:flex; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9000; justify-content:center; align-items:center;">
+                <div style="background:white; padding:2rem; border-radius:12px; width:500px; box-shadow:0 10px 25px rgba(0,0,0,0.2);">
+                    <h3 style="margin-top:0;">Edit Level ${roundNum} Configuration</h3>
+                    
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top:1.5rem;">
+                        <div>
+                            <label style="font-weight:600; font-size:0.9rem;">Time Duration (Minutes)</label>
+                            <input type="number" id="edit-r-time" class="input" style="width:100%; margin-top:0.5rem;" value="${duration}">
+                        </div>
+                        <div>
+                            <label style="font-weight:600; font-size:0.9rem;">Allowed Language</label>
+                            <select id="edit-r-lang" class="input" style="width:100%; margin-top:0.5rem;">
+                                <option value="python" ${lang === 'python' ? 'selected' : ''}>Python</option>
+                                <option value="javascript" ${lang === 'javascript' ? 'selected' : ''}>JavaScript</option>
+                                <option value="c" ${lang === 'c' ? 'selected' : ''}>C</option>
+                                <option value="cpp" ${lang === 'cpp' ? 'selected' : ''}>C++</option>
+                                <option value="java" ${lang === 'java' ? 'selected' : ''}>Java</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 2rem; display:flex; justify-content:flex-end; gap:10px;">
+                        <button class="btn btn-secondary" onclick="document.getElementById('round-edit-modal').remove()">Cancel</button>
+                        <button class="btn btn-primary" onclick="Admin.saveRoundSettings('${contestId}', '${roundNum}')">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+    },
+
+    async saveRoundSettings(contestId, roundNum) {
+        const duration = document.getElementById('edit-r-time').value;
+        const lang = document.getElementById('edit-r-lang').value;
+
+        try {
+            await API.request(`/contest/${contestId}/rounds/${roundNum}`, 'PUT', {
+                time_limit: parseInt(duration),
+                allowed_language: lang
+            });
+            document.getElementById('round-edit-modal').remove();
+            Admin.showNotification("Round Configuration Saved", "success");
+            this.loadContestDetail(contestId); // Refresh list
+        } catch (e) {
+            console.error(e);
+            alert("Error saving configuration: " + e.message);
         }
     },
 
@@ -557,11 +657,20 @@ const Admin = {
                 start_time: new Date(start).toISOString(),
                 end_time: new Date(end).toISOString()
             });
+
             document.getElementById('edit-modal').remove();
-            this.showNotification('Contest Updated, Participants Notified', 'success');
-            this.loadContestDetail(contestId);
+            this.showNotification('Contest settings saved', 'success');
+
+            // Silent Update Header
+            const headerTitle = document.querySelector('.admin-header h1');
+            if (headerTitle) {
+                // Keep the badge, update text
+                const badge = headerTitle.querySelector('.badge');
+                headerTitle.childNodes[0].nodeValue = title + " ";
+            }
+            // this.loadContestDetail(contestId); // REMOVE THIS to prevent reload
         } catch (e) {
-            alert('Failed to update');
+            alert('Error saving settings');
         }
     },
 
@@ -667,14 +776,14 @@ const Admin = {
         try {
             const res = await API.request(`/contest/${this.activeContestId}/countdown`);
             const isActive = res.active === true;
-            
+
             // Toggle
             const action = isActive ? 'stop' : 'start';
             const sel = document.getElementById('wait-time-selector');
             const duration = sel ? sel.value : 15;
 
             const toggleRes = await API.request(`/contest/${this.activeContestId}/countdown`, 'POST', { action, duration });
-            
+
             if (toggleRes.success) {
                 this.loadDashboard(); // Refresh UI fully
                 Toast.show(`Countdown ${action.toUpperCase()}ED`, 'success');
@@ -1101,47 +1210,77 @@ const Admin = {
                             <i class="fa-solid fa-file-excel"></i> Import Excel
                         </button>
                         <button class="btn btn-primary" onclick="Admin.showAddParticipantModal()">
-                            <i class="fa-solid fa-plus"></i> Add Participant
+                            <i class="fa-solid fa-user-plus"></i> Add Participant
                         </button>
                     </div>
                 </div>
 
-                <div class="bg-white rounded-xl shadow-sm" style="background: white; border-radius: var(--radius-xl); padding: var(--space-6);">
+                <div class="bg-white rounded-xl shadow-sm" style="background: white; border-radius: var(--radius-xl); padding: var(--space-6); overflow-x: auto;">
                     <table class="admin-table">
                         <thead>
                             <tr>
                                 <th>ID</th>
                                 <th>Name</th>
+                                <th>College</th>
+                                <th>Dept</th>
                                 <th class="center">Status</th>
-                                <th class="center">Score</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
                         <tbody>
                             ${participants.length > 0 ? participants.map(p => `
                             <tr>
-                                <td>${p.participant_id}</td>
-                                <td>${p.name}</td>
-                                <td class="center">${p.status}</td>
-                                <td class="center">${p.score || 0}</td>
+                                <td><span style="font-family:'Fira Code'; font-size:0.9em; font-weight:600;">${p.participant_id}</span></td>
                                 <td>
-                                    <button class="btn btn-secondary" onclick="Admin.deleteParticipant('${p.participant_id}')" style="color: red; border-color: red;">Delete</button>
+                                    <div style="font-weight:600;">${p.name}</div>
+                                    <div style="font-size:0.75rem; color:gray;">${p.email || '-'}</div>
+                                </td>
+                                <td><small>${p.college || '-'}</small></td>
+                                <td><small>${p.department || '-'}</small></td>
+                                <td class="center">
+                                    <span class="badge ${p.status === 'active' ? 'badge-success' : 'badge-gray'}" style="text-transform:uppercase; font-size:0.7em;">${p.status}</span>
+                                </td>
+                                <td>
+                                    <button class="btn btn-secondary" onclick="Admin.deleteParticipant('${p.participant_id}')" style="color: red; border-color: red; padding: 2px 8px; font-size: 0.8em;">Delete</button>
                                 </td>
                             </tr>
-                            `).join('') : '<tr><td colspan="5" style="text-align:center; padding: 2rem;">No participants yet. Add one!</td></tr>'}
+                            `).join('') : '<tr><td colspan="6" style="text-align:center; padding: 2rem; color:gray;">No participants yet. Import Excel or Add Manually.</td></tr>'}
                         </tbody>
                     </table>
                 </div>
 
-                <!-- MODAL (Inline for simplicity) -->
+                <!-- MODAL: ADD PARTICIPANT -->
                 <div id="add-p-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
-                    <div class="glass-card" style="background:white; padding:2rem; width:400px; color: black;">
-                        <h3 style="margin-bottom: 1rem;">Add Participant</h3>
-                        <input type="text" id="new-p-name" class="input" placeholder="Full Name" style="width:100%; margin: 1rem 0;">
-                        <input type="text" id="new-p-id" class="input" placeholder="Custom ID (Optional)" style="width:100%; margin-bottom: 1rem;">
-                        <div style="display:flex; justify-content: flex-end; gap: 1rem;">
+                    <div class="glass-card" style="background:white; padding:2rem; width:450px; color: black; display:flex; flex-direction:column; max-height:90vh; overflow-y:auto;">
+                        <h3 style="margin-bottom: 1rem; color: var(--primary-700);">Add New Participant</h3>
+                        
+                        <label style="font-weight:600; font-size:0.85rem; margin-top:0.5rem;">Full Name <span style="color:red">*</span></label>
+                        <input type="text" id="new-p-name" class="input" placeholder="e.g. John Doe" style="width:100%;">
+                        
+                        <label style="font-weight:600; font-size:0.85rem; margin-top:1rem;">College <span style="color:red">*</span></label>
+                        <input type="text" id="new-p-college" class="input" placeholder="e.g. SAC Sacred Heart College" style="width:100%;">
+                        
+                        <label style="font-weight:600; font-size:0.85rem; margin-top:1rem;">Department <span style="color:red">*</span></label>
+                        <input type="text" id="new-p-dept" class="input" placeholder="e.g. CS" style="width:100%;">
+                        
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-top:1rem;">
+                            <div>
+                                <label style="font-weight:600; font-size:0.85rem;">Phone</label>
+                                <input type="text" id="new-p-phone" class="input" placeholder="Optional" style="width:100%;">
+                            </div>
+                            <div>
+                                <label style="font-weight:600; font-size:0.85rem;">Email</label>
+                                <input type="email" id="new-p-email" class="input" placeholder="Optional" style="width:100%;">
+                            </div>
+                        </div>
+
+                        <div style="background:#f0f9ff; padding:1rem; border-radius:8px; margin-top:1.5rem; font-size:0.8rem; color:#0369a1;">
+                            <i class="fa-solid fa-info-circle"></i> Participant ID will be auto-generated (e.g. <b>SHCCSGF001</b>).
+                        </div>
+
+                        <div style="display:flex; justify-content: flex-end; gap: 1rem; margin-top: 1.5rem;">
                             <button class="btn btn-secondary" onclick="document.getElementById('add-p-modal').style.display='none'">Cancel</button>
-                            <button class="btn btn-primary" onclick="Admin.submitNewParticipant()">Create</button>
+                            <button class="btn btn-primary" onclick="Admin.submitNewParticipant()">Create Participant</button>
                         </div>
                     </div>
                 </div>
@@ -1153,25 +1292,41 @@ const Admin = {
     },
 
     showAddParticipantModal() {
-        // Ensure modal display logic works - using flex to center
         const modal = document.getElementById('add-p-modal');
         if (modal) modal.style.display = 'flex';
     },
 
     async submitNewParticipant() {
         const name = document.getElementById('new-p-name').value;
-        const pid = document.getElementById('new-p-id').value;
+        const college = document.getElementById('new-p-college').value;
+        const dept = document.getElementById('new-p-dept').value;
+        const phone = document.getElementById('new-p-phone').value;
+        const email = document.getElementById('new-p-email').value;
 
-        if (!name) return alert("Name is required");
+        if (!name || !college || !dept) return alert("FullName, College, and Department are required.");
 
-        await API.request('/admin/participants', 'POST', { name, participant_id: pid });
-        document.getElementById('add-p-modal').style.display = 'none';
-        this.loadParticipantsView(); // Refresh
+        try {
+            await API.request('/admin/participants', 'POST', {
+                name,
+                college,
+                department: dept,
+                phone,
+                email,
+                participant_id: null // Backend generates SHCCSGF... ID
+            });
+            document.getElementById('add-p-modal').style.display = 'none';
+            this.showNotification("Participant Added Successfully", "success");
+            this.loadParticipantsView(); // Refresh
+        } catch (e) {
+            console.error(e);
+            alert("Failed to create participant: " + e.message);
+        }
     },
 
     async deleteParticipant(pid) {
-        if (confirm('Delete this user?')) {
+        if (confirm(`Delete user ${pid}? This action cannot be undone.`)) {
             await API.request(`/admin/participants/${pid}`, 'DELETE');
+            this.showNotification("Participant Deleted", "info");
             this.loadParticipantsView();
         }
     },
@@ -1196,23 +1351,29 @@ const Admin = {
                 let successCount = 0;
                 let failCount = 0;
 
-                // Simple loading feedback
                 const btn = document.querySelector('.admin-header .btn-secondary');
                 const originalText = btn.innerHTML;
                 btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
                 btn.disabled = true;
 
                 for (const row of jsonData) {
-                    // Expect columns: Name, ID (case insensitive matching if possible, but let's stick to simple key check)
-                    // Normalize keys:
-                    const name = row['Name'] || row['name'] || row['NAME'];
-                    const pid = row['ID'] || row['id'] || row['Id'] || row['Participant ID'];
+                    // Try to map various column name possibilities
+                    const pid = row['Participant ID'] || row['ID'] || row['id'] || row['User ID'];
+                    const name = row['Full Name'] || row['Name'] || row['Student Name'];
+                    const college = row['College'] || row['Institution'] || row['College Name'];
+                    const dept = row['Department'] || row['Dept'] || row['Branch'];
+                    const phone = row['Phone'] || row['Mobile'] || row['Contact'];
+                    const email = row['Email'] || row['Email Address'] || row['Mail'];
 
-                    if (name) {
+                    if (pid && name) {
                         try {
                             const res = await API.request('/admin/participants', 'POST', {
-                                name: name,
-                                participant_id: pid || null // API handles auto-gen if null
+                                participant_id: String(pid).trim(),
+                                name: String(name).trim(),
+                                college: college ? String(college).trim() : '',
+                                department: dept ? String(dept).trim() : '',
+                                phone: phone ? String(phone).trim() : '',
+                                email: email ? String(email).trim() : ''
                             });
                             if (res && res.success) successCount++;
                             else failCount++;
@@ -1220,18 +1381,25 @@ const Admin = {
                             console.error("Failed to add", name, err);
                             failCount++;
                         }
+                    } else {
+                        // Skip row logic or count as fail?
+                        if (name || pid) failCount++; // Count as fail if at least something was there but insufficient
                     }
                 }
 
-                alert(`Import Complete!\nSuccess: ${successCount}\nFailed: ${failCount}`);
-                this.loadParticipantsView(); // Refresh
-                input.value = ''; // Reset input
-            } catch (err) {
-                console.error("Error parsing Excel:", err);
-                alert("Error parsing Excel file. Ensure it has columns: Name, ID");
-                const btn = document.querySelector('.admin-header .btn-secondary');
+                alert(`Import Complete!\nSuccess: ${successCount}\nFailed/Skipped: ${failCount}`);
+                this.loadParticipantsView();
+                input.value = '';
                 btn.innerHTML = originalText;
                 btn.disabled = false;
+            } catch (err) {
+                console.error("Error parsing Excel:", err);
+                alert("Error parsing Excel file. Ensure columns: 'Participant ID', 'Full Name', 'College', 'Department'");
+                const btn = document.querySelector('.admin-header .btn-secondary');
+                if (btn) {
+                    btn.innerHTML = '<i class="fa-solid fa-file-excel"></i> Import Excel';
+                    btn.disabled = false;
+                }
             }
         };
         reader.readAsArrayBuffer(file);
@@ -2311,6 +2479,7 @@ Admin.showEditLevelModal = async function (level) {
     // Find existing round data
     const round = (this.currentRounds || []).find(r => r.round_number == level);
     const timeLimit = round ? round.time_limit_minutes : 30;
+    const allowedLanguage = round ? (round.allowed_language || 'python') : 'python';
 
     // Fetch questions for this level to allow reordering
     let questions = [];
@@ -2329,8 +2498,22 @@ Admin.showEditLevelModal = async function (level) {
                 </div>
                 
                 <div class="modal-body">
-                    <label>Time Duration (Minutes)</label>
-                    <input type="number" id="edit-lvl-time" class="input" style="width:100%; margin-bottom:1.5rem;" value="${timeLimit}">
+                    <div style="display:flex; gap: 1rem; margin-bottom: 1.5rem;">
+                        <div style="flex:1;">
+                            <label>Time Duration (Minutes)</label>
+                            <input type="number" id="edit-lvl-time" class="input" style="width:100%;" value="${timeLimit}">
+                        </div>
+                        <div style="flex:1;">
+                            <label>Allowed Language</label>
+                            <select id="edit-lvl-lang" class="input" style="width:100%;">
+                                <option value="python" ${allowedLanguage === 'python' ? 'selected' : ''}>Python</option>
+                                <option value="javascript" ${allowedLanguage === 'javascript' ? 'selected' : ''}>JavaScript (Node.js)</option>
+                                <option value="c" ${allowedLanguage === 'c' ? 'selected' : ''}>C (GCC)</option>
+                                <option value="cpp" ${allowedLanguage === 'cpp' ? 'selected' : ''}>C++ (G++)</option>
+                                <option value="java" ${allowedLanguage === 'java' ? 'selected' : ''}>Java</option>
+                            </select>
+                        </div>
+                    </div>
                     
                     <label>Question Order</label>
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
@@ -2374,6 +2557,7 @@ Admin.showEditLevelModal = async function (level) {
 
 Admin.saveLevelConfig = async function (level) {
     const timeLimit = document.getElementById('edit-lvl-time').value;
+    const allowedLanguage = document.getElementById('edit-lvl-lang').value;
 
     // Get question order
     const qItems = document.querySelectorAll('#lvl-q-list .list-item');
@@ -2388,12 +2572,34 @@ Admin.saveLevelConfig = async function (level) {
     try {
         await API.request(`/contest/${this.activeContestId}/rounds/${level}`, 'PUT', {
             time_limit: timeLimit,
+            allowed_language: allowedLanguage,
             questions_order: questionsOrder
         });
 
         document.getElementById('edit-level-modal').remove();
         this.showNotification(`Level ${level} updated successfully`, 'success');
-        this.loadDashboard(); // Refresh
+
+        // Silent Update: Fetch latest rounds to keep local state in sync without UI reset
+        try {
+            const rRes = await API.request(`/contest/${this.activeContestId}/rounds`);
+            if (rRes.rounds) {
+                this.currentRounds = rRes.rounds;
+                // Update the specific round card in the list if visible
+                // Or just rely on next interaction to use fresh data
+                // We could re-render just the rounds list:
+                const roundsListEl = document.getElementById('rounds-list');
+                if (roundsListEl) {
+                    // We won't re-render full HTML to avoid disrupting any other state,
+                    // but we should ideally update the time limit displayed on the card.
+                    const roundCard = roundsListEl.querySelector(`[data-id="${level}"]`) ||
+                        Array.from(roundsListEl.children).find(el => el.innerText.includes(`Level ${level}`));
+                    // Since data-id might be round ID not number, need to match carefully.
+                    // But typically loadContestDetail used round.id. Here 'level' is round_number.
+                    // Let's just update local state. The user said "Do not navigate".
+                }
+            }
+        } catch (ignore) { }
+
     } catch (e) {
         console.error(e);
         alert("Failed to update level configuration");
@@ -2482,9 +2688,36 @@ Admin.saveLevelQuestion = async function (level, qid) {
 
         if (res.success) {
             document.getElementById('q-form-modal').remove();
-            document.getElementById('edit-level-modal').remove(); // Close parent to refresh
             this.showNotification('Question saved successfully', 'success');
-            setTimeout(() => this.showEditLevelModal(level), 500); // Re-open parent to show new list
+
+            // Refresh the questions list in the PARENT modal (Edit Level Modal) without closing it
+            try {
+                const listContainer = document.getElementById('lvl-q-list');
+                if (listContainer) {
+                    // Show loading state
+                    listContainer.innerHTML = '<p style="padding:1rem; text-align:center; color:gray;">Refreshing list...</p>';
+
+                    // Fetch fresh questions
+                    const qRes = await API.request(`/contest/questions?contest_id=${this.activeContestId}&level=${level}`);
+                    const questions = qRes.questions || [];
+
+                    // Re-render list
+                    listContainer.innerHTML = questions.length > 0 ? questions.map((q, idx) => `
+                        <div class="list-item" data-id="${q.id}" style="cursor:move;">
+                            <div style="display:flex; align-items:center; flex:1;">
+                                <span style="margin-right:0.75rem; color:#cbd5e1;"><i class="fa-solid fa-grip-vertical"></i></span>
+                                <div>
+                                    <div style="font-weight:500;">${q.title}</div>
+                                    <div style="font-size:0.75rem; color:gray;">ID: ${q.number} | ${q.difficulty}</div>
+                                </div>
+                            </div>
+                            <button class="btn-icon" onclick='event.stopPropagation(); Admin.showQuestionFormModal(${level}, ${JSON.stringify(q).replace(/'/g, "&#39;")})' title="Edit Question">
+                                <i class="fa-solid fa-pen"></i>
+                            </button>
+                        </div>
+                    `).join('') : '<p style="padding:1rem; text-align:center; color:gray;">No questions assigned to this level yet.</p>';
+                }
+            } catch (ignore) { console.error(ignore); }
         }
     } catch (e) {
         console.error(e);
