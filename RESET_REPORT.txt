@@ -1,0 +1,23 @@
+PROJECT RESET REPORT
+====================
+Date: 2026-01-25 22:25:33.678136
+
+DATA CLEANUP:
+ - violations: Cleared
+ - submissions: Cleared
+ - participant_level_stats: Cleared
+ - questions: Cleared
+ - rounds: Cleared
+ - contests: Cleared
+ - users: Cleared
+ - admin_state: Cleared
+Admin Created: username='admin', password='admin123'
+Leader Created: username='leader1', password='leader123'
+Participants Created: 10 (PART001 - PART010)
+Contest Created: 'Debug Marathon 2026' (ID: 1, Status: LIVE)
+Round Created: Level 1 (ID: 1, python, 45m)
+Round Created: Level 2 (ID: 2, python, 45m)
+Round Created: Level 3 (ID: 3, c, 60m)
+Round Created: Level 4 (ID: 4, cpp, 60m)
+Round Created: Level 5 (ID: 5, java, 90m)
+Questions Created: 7 Total Questions across 5 Levels

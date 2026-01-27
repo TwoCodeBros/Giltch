@@ -1,336 +1,306 @@
 /**
  * proctoring.js
- * Frontend security and violation tracking
+ * Advanced Frontend Security & Violation Tracking System
+ * - Tab Switch Detection
+ * - Focus Loss Detection
+ * - Fullscreen Enforcement
+ * - DevTools Detection
+ * - Copy/Paste/Right-Click Blocking
  */
 
 window.Proctoring = {
     violations: 0,
     isActive: false,
+    levelActive: false,
+    strictLockActive: false,
+    config: {
+        max_violations: 20,
+        track_tab_switches: true,
+        track_focus_loss: true,
+        block_copy: true,
+        block_paste: true,
+        block_right_click: true,
+        detect_screenshot: true,
+        detect_devtools: true
+    },
+
+    // State tracking
+    lastInteractionTime: 0,
+    enforceInterval: null,
+    devToolsInterval: null,
 
     async init(contestId) {
         if (this.isActive) return;
         this.isActive = true;
+        console.log("Initializing Proctoring System...");
 
-        // Fetch Config
+        // Try to fetch config, fallback to strict defaults
         try {
-            const res = await API.request(`/proctoring/config/${contestId}`);
-            if (res.success) {
-                this.config = res.config;
-                console.log('Proctoring Config Loaded:', this.config);
-            }
-        } catch (e) {
-            console.warn('Failed to load proctoring config, using defaults', e);
-            this.config = {
-                max_violations: 10,
-                track_tab_switches: true,
-                track_focus_loss: true,
-                block_copy: true,
-                block_paste: true,
-                block_right_click: true,
-                detect_screenshot: true
-            };
-        }
-
-        if (this.config && this.config.enabled === false) {
-            console.log('Proctoring is disabled for this contest.');
-            this.isActive = false;
-            return;
-        }
-
-        // Fetch Current Status (Persistence)
-        try {
-            const session = Storage.get('session');
-            if (session && session.participant) {
-                const pid = session.participant.participant_id;
-                const statusRes = await API.request(`/proctoring/status/participant/${pid}`);
-                if (statusRes.success && statusRes.status) {
-                    this.violations = statusRes.status.total_violations || 0;
-                    console.log("Restored violations:", this.violations);
+            if (contestId) {
+                const res = await API.request(`/proctoring/config/${contestId}`);
+                if (res.success && res.config) {
+                    this.config = { ...this.config, ...res.config };
                 }
             }
         } catch (e) {
-            console.warn("Failed to restore violations", e);
+            console.warn("Proctoring config fetch failed, using defaults.");
         }
 
-        this.updateBadge();
         this.bindEvents();
-        console.log('Proctoring System Initialized');
+        this.startDevToolsDetection();
+        this.updateBadge();
     },
 
-    config: null,
-
-    lastViolationTime: 0,
-    levelActive: false, // Only monitor when level is actually playing
-
-    lastInteractionTime: 0,
+    reset() {
+        this.violations = 0;
+        this.levelActive = true;
+        this.updateBadge();
+        this.dismissOverlay();
+        // Clear any previous blurred state
+        document.body.classList.remove('security-blur');
+    },
 
     bindEvents() {
-        // Track valid interactions to prevent false positives
-        // USE CAPTURE to detect clicks even if stopPropagation is called (e.g. by buttons/editors)
-        window.addEventListener('mousedown', () => {
-            this.lastInteractionTime = Date.now();
-        }, true);
-        window.addEventListener('keydown', () => {
-            this.lastInteractionTime = Date.now();
-        }, true);
-        window.addEventListener('click', () => {
-            this.lastInteractionTime = Date.now();
-        }, true);
+        // Interaction tracking to debounce false positives
+        ['mousedown', 'keydown', 'click', 'mousemove'].forEach(evt => {
+            window.addEventListener(evt, () => { this.lastInteractionTime = Date.now(); }, true);
+        });
 
-        // 1. Tab Switch (Visibility Change) - The ONLY trigger for "Tab Switch" violation
+        // 1. Tab Switch & Visibility
         document.addEventListener('visibilitychange', () => {
-            if (this.levelActive || this.strictLockActive) {
-                if (document.hidden) {
-                    this.recordViolation('TAB_SWITCH', true, 'Tab switched or minimized');
-                    this.showOverlay('You have left the contest window.', 'Tab Switch Detected!');
-                } else {
-                    // Returned to tab -> Force Fullscreen
-                    this.enterFullscreen();
-                }
-            }
-        });
+            if (!this.shouldEnforce()) return;
 
-        // 2. Window Blur (Focus Loss) - STRICTLY for clicking outside the window
-        window.addEventListener('blur', () => {
-            if (this.levelActive || this.strictLockActive) {
-
-                // IGNORES:
-                // 1. If we hold focus (e.g. clicked an iframe)
-                if (document.activeElement && (document.activeElement.tagName === 'IFRAME' || document.activeElement.tagName === 'BODY')) {
-                    // Verify if it's actually an iframe or just body (which happens on window blur too)
-                    // If it's an iframe, we assume user is editing code.
-                    if (document.activeElement.tagName === 'IFRAME') return;
-                }
-
-                // 2. Recent Interaction Grace Period (Increased to 1s)
-                // This covers button clicks where focus might briefly shift or events bubble late
-                if (Date.now() - this.lastInteractionTime < 1000) return;
-
-                // 3. Explicit Ignore Flag
-                if (this.ignoreBlur) return;
-
-                setTimeout(() => {
-                    // Double Check: Did we regain focus immediately? (False positive check)
-                    if (document.hasFocus()) return;
-
-                    // Double Check: Is the level still active?
-                    if (this.levelActive || this.strictLockActive) {
-                        this.recordViolation('FOCUS_LOST', true, 'Window lost focus');
-                        this.showOverlay('Focus lost! Click to return.', 'Focus Lost!');
-                    }
-                }, 1000); // 1-second debounce (generous)
-            }
-        });
-
-        // 3. Focus Regained
-        window.addEventListener('focus', () => {
-            if ((this.levelActive || this.strictLockActive) && !document.fullscreenElement) {
-                this.enterFullscreen();
-                // We don't dismiss overlay automatically for genuine violations usually, 
-                // but for focus loss it's better UX to just require a click (which triggers focus).
-                // Proctoring.dismissOverlay() is called by the button.
-            }
-        });
-
-        // 4. Fullscreen Change
-        document.addEventListener('fullscreenchange', () => {
-            if (!document.fullscreenElement && (this.levelActive || this.strictLockActive)) {
-                this.recordViolation('FULLSCREEN_EXIT', true, 'Exited fullscreen mode');
-                this.showOverlay('FULLSCREEN REQUIRED! Click button to return.', 'Security Alert');
-            }
-        });
-
-        // 5. Keyboard Blockers (Combined)
-        document.addEventListener('keydown', (e) => {
-            if (!this.levelActive && !this.strictLockActive) return;
-
-            // Strict Mode Keys
-            const isEscape = (e.key === 'Escape');
-            const isCtrlM = (e.ctrlKey && e.key.toLowerCase() === 'm');
-            const isAltTab = (e.altKey && (e.key === 'Tab' || e.keyCode === 9));
-            const isWin = (e.metaKey);
-
-            if (this.strictLockActive) {
-                if (isEscape || isCtrlM || isWin || isAltTab) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this.recordViolation('KEY_LOCK_ATTEMPT', true, `Blocked Key: ${e.key}`);
-                    return false;
-                }
+            if (document.hidden) {
+                this.recordViolation('TAB_SWITCH', true, 'Tab switched or browser minimized');
+                this.triggerSecurityLockout('Tab Switch Detected');
             } else {
-                if (isEscape) {
+                // Returned to tab
+                setTimeout(() => this.checkFullscreen(), 500);
+            }
+        });
+
+        // 2. Window Focus (Blur)
+        window.addEventListener('blur', () => {
+            if (!this.shouldEnforce()) return;
+
+            // Immediate blur effect to prevent screenshots of content
+            document.body.classList.add('security-blur');
+
+            // Small grace period for legitimate system popups or fast alt-tabs
+            // but we engage visual lockout immediately
+            setTimeout(() => {
+                if (!document.hasFocus() && this.shouldEnforce()) {
+                    this.recordViolation('FOCUS_LOST', true, 'Window focus lost (Alt+Tab or outside click)');
+                    this.triggerSecurityLockout('Focus Lost! Return Immediately.');
+                }
+            }, 500);
+        });
+
+        window.addEventListener('focus', () => {
+            if (this.shouldEnforce()) {
+                document.body.classList.remove('security-blur');
+                this.checkFullscreen();
+            }
+        });
+
+        // 3. Fullscreen Enforcement
+        document.addEventListener('fullscreenchange', () => {
+            if (!this.shouldEnforce()) return;
+            if (!document.fullscreenElement) {
+                this.recordViolation('FULLSCREEN_EXIT', true, 'Exited fullscreen mode');
+                this.triggerSecurityLockout('Fullscreen is Mandatory');
+            }
+        });
+
+        // 4. Keyboard Shortcuts & PrintScreen
+        window.addEventListener('keydown', (e) => {
+            if (!this.shouldEnforce()) return;
+
+            // Detect PrintScreen
+            if (e.key === 'PrintScreen' || e.code === 'PrintScreen' || e.keyCode === 44) {
+                // Obscure screen immediately
+                document.body.style.filter = 'blur(20px)';
+                setTimeout(() => document.body.style.filter = '', 1000); // Restore after 1s
+
+                this.recordViolation('SCREENSHOT_ATTEMPT', true, 'Screenshot key detected');
+                e.preventDefault();
+                return;
+            }
+
+            // Block Inspect Element / DevTools shortcuts
+            // Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U, F12
+            if (e.key === 'F12' ||
+                (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
+                (e.ctrlKey && e.key === 'u')) {
+                e.preventDefault();
+                this.recordViolation('DEV_TOOLS_ATTEMPT', true, 'DevTools shortcut blocked');
+                return;
+            }
+
+            // Block Copy/Paste/Cut shortcuts if strict
+            if (e.ctrlKey && ['c', 'v', 'x', 'a'].includes(e.key.toLowerCase())) {
+                if (this.config.block_copy) {
                     e.preventDefault();
-                    this.recordViolation('ESC_ATTEMPT', false, 'Tried to exit via ESC');
-                    return false;
+                    this.recordViolation('CLIPBOARD_SHORTCUT', true, 'Clipboard shortcut blocked');
                 }
             }
 
-            // DevTools
-            if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && ['I', 'C', 'J', 'U'].includes(e.key))) {
-                e.preventDefault();
-                this.recordViolation('DEVTOOLS_ATTEMPT', true, 'DevTools blocked');
+            // Alt+Tab detection heuristic (Alt key hold)
+            if (e.altKey && e.key === 'Tab') {
+                this.recordViolation('TAB_SWITCH_ATTEMPT', true, 'Alt+Tab detected');
             }
+        }, true);
 
-            // PrintScreen
-            if (e.key === 'PrintScreen') {
-                this.ignoreBlur = true;
-                this.recordViolation('SCREENSHOT_ATTEMPT', true, 'Screenshot detected');
-                setTimeout(() => this.ignoreBlur = false, 2000);
+        // 5. Mouse Restrictions
+        document.addEventListener('contextmenu', (e) => {
+            if (this.shouldEnforce() && this.config.block_right_click) {
+                e.preventDefault();
+                this.recordViolation('RIGHT_CLICK', false, 'Right click blocked');
             }
-        });
+        }, true);
 
-        // 6. Mouse/Paste Blockers
-        document.addEventListener('contextmenu', e => {
-            if ((this.levelActive || this.strictLockActive) && this.config?.block_right_click) {
-                e.preventDefault();
-                this.recordViolation('RIGHT_CLICK', false);
+        // Prevent selection if configured
+        document.addEventListener('selectstart', (e) => {
+            if (this.shouldEnforce() && this.config.block_copy) {
+                const target = e.target;
+                // Allow selection in editor if needed, but generally block
+                // If target is inside ace-editor, we might allow it? 
+                // For now, strict block unless logic refined.
+                // e.preventDefault(); 
             }
         });
-        document.body.addEventListener('copy', e => {
-            if ((this.levelActive || this.strictLockActive) && this.config?.block_copy && !e.target.closest('.ace_editor')) {
-                e.preventDefault();
-                this.recordViolation('COPY_ATTEMPT', true);
-            }
-        });
-        document.body.addEventListener('paste', e => {
-            if ((this.levelActive || this.strictLockActive) && this.config?.block_paste) {
-                e.preventDefault();
-                this.recordViolation('PASTE_ATTEMPT', true);
-            }
-        });
-        document.body.addEventListener('cut', e => {
-            if ((this.levelActive || this.strictLockActive) && this.config?.block_cut && !e.target.closest('.ace_editor')) {
-                e.preventDefault();
-                this.recordViolation('CUT_ATTEMPT', true);
-            }
-        });
-
-        // Periodic Enforcement
-        this.startEnforcement();
     },
 
-    // ... (rest of the file unchanged methods) ...
-
-    async recordViolation(type, countPenalty = true, description = '') {
-        // ... (unchanged logic) ...
-        if (this.config) {
-            if (type === 'TAB_SWITCH' && !this.config.track_tab_switches) return;
-            if (type === 'FOCUS_LOST' && !this.config.track_focus_loss) return;
-            if (type === 'COPY_ATTEMPT' && !this.config.block_copy) return;
-            if (type === 'PASTE_ATTEMPT' && !this.config.block_paste) return;
-            if (type === 'SCREENSHOT_ATTEMPT' && !this.config.detect_screenshot) return;
-            if (type === 'RIGHT_CLICK' && !this.config.block_right_click) return;
-        }
-
-        // Always record logic ...
-        this.lastViolationTime = Date.now();
-        if (countPenalty) {
-            this.violations++;
-            this.updateBadge();
-
-            // ... API Calls ...
-            try {
-                const session = Storage.get('session');
-                const pId = session ? session.participant.participant_id : null;
-                const c = window.Contest || {};
-                await API.request('/proctoring/violation', 'POST', {
-                    violation_type: type,
-                    description,
-                    total_violations: this.violations,
-                    participant_id: pId,
-                    contest_id: c.activeContestId,
-                    question_id: c.questions ? (c.questions[c.currentQId]?.id) : null,
-                    level: c.currentLevel,
-                    timestamp: new Date().toISOString()
-                });
-            } catch (e) { }
-
-            // Check Max
-            const max = this.config?.max_violations || 10;
-            if (this.violations > max) {
-                this.stop(); // Stop proctoring first
-                if (window.Contest) window.Contest.submitLevel(true, 'DISQUALIFIED');
-                else window.location.href = 'index.html';
-            }
-        }
+    shouldEnforce() {
+        return this.levelActive || this.strictLockActive;
     },
 
-    // Stub methods for replace compatibility if needed, but aiming for minimal destructive edit in replace_file is better.
-    // Since I need to inject `strictLockActive` check into existing listener, I'll rewrite bindEvents completely.
-
-    updateBadge() {
-        const badge = document.getElementById('violation-count');
-        if (badge) {
-            badge.textContent = `${this.violations} Violations`;
-            if (this.violations < 3) badge.style.backgroundColor = 'var(--success)';
-            else if (this.violations < 5) badge.style.backgroundColor = 'var(--warning)';
-            else badge.style.backgroundColor = 'var(--error)';
-        }
+    triggerSecurityLockout(msg) {
+        this.showOverlay(msg);
+        this.enterFullscreen(); // Try to force back
+        document.body.classList.add('security-blur');
     },
 
-    showOverlay(message, title = "Security Alert") {
-        if (!this.levelActive && !this.strictLockActive) return;
+    showOverlay(msg) {
         const overlay = document.getElementById('proctor-overlay');
-        const msgElem = overlay ? overlay.querySelector('p') : null;
-        const titleElem = overlay ? overlay.querySelector('h2') : null;
-
         if (overlay) {
-            if (msgElem && message) msgElem.textContent = message;
-            if (titleElem && title) titleElem.textContent = title;
             overlay.style.display = 'flex';
+            const reqText = overlay.querySelector('.proctor-alert p') || overlay.querySelector('p');
+            if (reqText) reqText.innerText = msg;
         }
     },
 
     dismissOverlay() {
-        if ((this.levelActive || this.strictLockActive) && !document.fullscreenElement) {
-            this.enterFullscreen();
-            return;
-        }
         const overlay = document.getElementById('proctor-overlay');
         if (overlay) overlay.style.display = 'none';
+        document.body.classList.remove('security-blur');
     },
 
-    startEnforcement() {
-        if (this.enforceInterval) clearInterval(this.enforceInterval);
-        this.enforceInterval = setInterval(() => {
-            if ((this.levelActive || this.strictLockActive) && !document.fullscreenElement) {
-                const overlay = document.getElementById('proctor-overlay');
-                if (!overlay || overlay.style.display === 'none') {
-                    this.showOverlay('Fullscreen is MANDATORY.', 'Security Alert');
-                }
+    async recordViolation(type, countPenalty, desc) {
+        if (!this.shouldEnforce()) return;
+
+        console.log(`[PROCTORING] Violation: ${type} - ${desc}`);
+
+        // Anti-bounce for fast occurring events
+        const now = Date.now();
+        if (now - this.lastViolationTime < 200 && type === this.lastViolationType) return; // Debounce same violation
+
+        this.lastViolationTime = now;
+        this.lastViolationType = type;
+
+        if (countPenalty) {
+            this.violations++;
+            this.updateBadge();
+
+            // Visual Flash
+            if (document.getElementById('game-ui-wrapper')) {
+                document.getElementById('game-ui-wrapper').style.border = "4px solid red";
+                setTimeout(() => {
+                    const el = document.getElementById('game-ui-wrapper');
+                    if (el) el.style.border = "none";
+                }, 500);
             }
-        }, 2000);
+
+            // Send to Backend
+            try {
+                const session = Storage.get('session');
+                const pId = session?.participant?.participant_id;
+                const c = window.Contest || {};
+
+                // Don't await this, let it fire and forget to keep UI snappy
+                API.request('/proctoring/violation', 'POST', {
+                    violation_type: type,
+                    description: desc,
+                    total_violations: this.violations,
+                    participant_id: pId,
+                    contest_id: c.activeContestId,
+                    question_id: c.currentQId !== undefined && c.questions ? c.questions[c.currentQId]?.id : null,
+                    level: c.currentLevel,
+                    timestamp: new Date().toISOString()
+                });
+            } catch (e) { console.error("Proctoring Sync Error", e); }
+
+            if (this.violations >= this.config.max_violations) {
+                this.handleDisqualification();
+            }
+        }
+    },
+
+    updateBadge() {
+        const el = document.getElementById('violation-count');
+        if (el) {
+            el.innerText = `${this.violations} Violations`;
+            el.className = 'violation-badge';
+            if (this.violations > 0) el.classList.add('warning');
+            if (this.violations >= 5) el.classList.add('danger');
+        }
+    },
+
+    checkFullscreen() {
+        if (!document.fullscreenElement && this.shouldEnforce()) {
+            this.triggerSecurityLockout("Fullscreen is required to continue.");
+        }
     },
 
     enterFullscreen() {
-        const elem = document.documentElement;
-        if (document.fullscreenElement) return;
-        const req = elem.requestFullscreen || elem.webkitRequestFullscreen || elem.msRequestFullscreen;
-        if (req) req.call(elem).catch(() => { });
+        try {
+            const el = document.documentElement;
+            if (el.requestFullscreen) el.requestFullscreen();
+            else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
+            else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+            else if (el.msRequestFullscreen) el.msRequestFullscreen();
+        } catch (e) {
+            // User interaction might be required
+        }
     },
 
-    exitFullscreen() {
-        if (document.fullscreenElement) document.exitFullscreen().catch(() => { });
-        if (this.enforceInterval) clearInterval(this.enforceInterval);
-        if (this.enforceFocus) clearInterval(this.enforceFocus);
-    },
-    stop() {
+    handleDisqualification() {
         this.levelActive = false;
-        this.strictLockActive = false;
-        this.exitFullscreen();
-        this.dismissOverlay();
-        console.log('Proctoring Deactivated');
+        alert("You have exceeded the maximum number of violations. You are now disqualified.");
+        window.location.href = 'index.html'; // Or kick out flow
+        if (window.Contest) window.Contest.logout();
     },
 
-    strictLockActive: false,
+    // DevTools Detection
+    startDevToolsDetection() {
+        if (this.devToolsInterval) clearInterval(this.devToolsInterval);
 
-    enableStrictLock() {
-        this.strictLockActive = true;
-        this.enterFullscreen();
-        this.enforceFocus = setInterval(() => {
-            if (this.strictLockActive && !document.hasFocus()) {
-                window.focus();
+        let devtoolsOpen = false;
+
+        this.devToolsInterval = setInterval(() => {
+            if (!this.shouldEnforce() || !this.config.detect_devtools) return;
+
+            // Method 1: Threshold
+            const threshold = 160;
+            const widthThreshold = window.outerWidth - window.innerWidth > threshold;
+            const heightThreshold = window.outerHeight - window.innerHeight > threshold;
+
+            if ((widthThreshold || heightThreshold) && !devtoolsOpen) {
+                devtoolsOpen = true;
+                this.recordViolation('DEVTOOLS_DETECTED', true, 'Developer Tools opened');
+            } else if (!(widthThreshold || heightThreshold)) {
+                devtoolsOpen = false;
             }
-        }, 100);
+        }, 1000);
     }
 };

@@ -1504,7 +1504,7 @@ const Admin = {
     // ================= QUESTIONS =================
     async loadQuestionsView() {
         try {
-            const data = await API.request('/contest/questions'); // Public endpoint reused
+            const data = await API.request('/admin/questions'); // Use Admin endpoint to see ALL levels
             const questions = data ? (data.questions || []) : [];
 
             const html = `
@@ -1723,8 +1723,20 @@ const Admin = {
 
     async showSelectionModal() {
         // Requirement: "Fetch saved shortlisted participants... Pre-check those"
-        // TODO: Dynamically Determine "Next Level". For now, assume Level 2 or logic active+1
-        const level = 2; // Default for now
+        // Dynamically Determine "Next Level".
+        let level = 2; // Default
+
+        // Find current active level or laster completed
+        if (this.currentRounds) {
+            const active = this.currentRounds.find(r => r.status === 'active');
+            if (active) level = active.round_number + 1;
+            else {
+                // If no active, maybe find last completed
+                const completed = this.currentRounds.filter(r => r.status === 'completed');
+                if (completed.length > 0) level = completed[completed.length - 1].round_number + 1;
+            }
+        }
+        if (level > 5) level = 5; // Cap
 
         const [data, shortData] = await Promise.all([
             API.request('/admin/participants'),
@@ -1806,9 +1818,19 @@ const Admin = {
     },
 
     async saveSelection() {
+        // Re-determine level to match what was shown
+        let level = 2; // Default
+        if (this.currentRounds) {
+            const active = this.currentRounds.find(r => r.status === 'active');
+            if (active) level = active.round_number + 1;
+            else {
+                const completed = this.currentRounds.filter(r => r.status === 'completed');
+                if (completed.length > 0) level = completed[completed.length - 1].round_number + 1;
+            }
+        }
+        if (level > 5) level = 5;
+
         const selectedIds = Array.from(document.querySelectorAll('.p-select-chk:checked')).map(el => el.value);
-        // Pass Level info. Hardcoded to 2 for now as per flow
-        const level = 2;
 
         // Alert Logic Update: Show actual count
         // "Alert message must show the real count of selected participants... NOT... Top N input value"
@@ -2121,6 +2143,9 @@ const Admin = {
                             <button class="btn btn-secondary" onclick="Admin.resetViolations('${status.participant_id}')" style="${compactBtnStyle}" title="Reset Violations">
                                 <i class="fa-solid fa-rotate-left"></i>
                             </button>
+                            <button class="btn btn-secondary" onclick="Admin.resetProgress('${status.participant_id}')" style="${compactBtnStyle} background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8;" title="FULL RESET (Progress & Violations)">
+                                <i class="fa-solid fa-trash-can-arrow-up"></i>
+                            </button>
                             <button class="btn" onclick="Admin.forceSubmitParticipant('${status.participant_id}')" title="Force Submit & Exit" style="${compactBtnStyle} background: #fff; border: 1px solid #d1d5db; color: #4b5563;">
                                 <i class="fa-solid fa-paper-plane"></i>
                             </button>
@@ -2141,6 +2166,24 @@ const Admin = {
         } catch (e) {
             console.error('Error toggling proctoring:', e);
             alert('Failed to toggle proctoring');
+        }
+    },
+
+    async resetProgress(pid) {
+        if (!confirm(`⚠️ DANGER: FULL RESET for ${pid}?\n\nThis will DELETE ALL submissions, level progress, and violations.\nThe participant will start from Level 1 as if new.`)) return;
+
+        try {
+            const res = await API.request('/proctoring/action/reset-progress', 'POST', {
+                participant_id: pid,
+                contest_id: this.activeContestId
+            });
+
+            if (res.success) {
+                this.showNotification(`Progress reset for ${pid}`, 'success');
+                this.loadProctoringView();
+            }
+        } catch (e) {
+            alert("Failed to reset progress: " + e.message);
         }
     },
 
@@ -2331,7 +2374,8 @@ const Admin = {
 
         try {
             const res = await API.request('/proctoring/action/reset-violations', 'POST', {
-                participant_id: participantId
+                participant_id: participantId,
+                contest_id: this.activeContestId
             });
 
             if (res.success) {
@@ -2766,3 +2810,22 @@ if (localStorage.getItem('admin_token')) {
     document.getElementById('admin-dashboard').style.display = 'block';
     Admin.init();
 }
+
+Admin.activateLevel = async function(level) {
+    if(!confirm('Activate Level ' + level + '?')) return;
+    try {
+        await API.request('/contest/' + this.activeContestId + '/level/' + level + '/activate', 'POST');
+        this.showNotification('Level ' + level + ' Activated', 'success');
+        this.loadDashboard();
+    } catch(e) { alert('Failed: ' + e.message); }
+};
+
+Admin.completeLevel = async function(level) {
+    if(!confirm('Complete Level ' + level + '?')) return;
+    try {
+        await API.request('/contest/' + this.activeContestId + '/level/' + level + '/complete', 'POST');
+        this.showNotification('Level ' + level + ' Completed', 'success');
+        this.loadDashboard();
+    } catch(e) { alert('Failed: ' + e.message); }
+};
+
