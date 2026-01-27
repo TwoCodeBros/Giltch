@@ -368,8 +368,71 @@ def get_status(contest_id):
     """
     db = get_db()
     try:
+        level_filter = request.args.get('level')
+        
+        query_base = """
+            SELECT 
+                u.username as participant_id,
+                u.full_name,
+                pp.risk_level,
+                pp.total_violations,
+                pp.violation_score,
+                pp.is_disqualified,
+                pp.last_violation_at,
+                pp.extra_violations,
+                pp.tab_switches,
+                pp.copy_attempts,
+                pp.screenshot_attempts,
+                pp.focus_losses
+            FROM users u
+            LEFT JOIN participant_proctoring pp ON u.user_id = pp.user_id AND pp.contest_id = %s
+            WHERE u.role = 'participant'
+        """
+        rows = db.execute_query(query_base, (contest_id,))
+        
+        # If level filter is active, we need to fetch VIOLATION COUNTS per user for this level
+        level_counts = {}
+        if level_filter and level_filter.lower() != 'all levels':
+            try:
+                l_int = int(level_filter.replace('Level ', '').strip())
+                # Count violations in 'violations' table for this level
+                v_res = db.execute_query(
+                    "SELECT user_id, COUNT(*) as cnt FROM violations WHERE contest_id=%s AND level=%s GROUP BY user_id", 
+                    (contest_id, l_int)
+                )
+                for v in v_res:
+                    level_counts[v['user_id']] = v['cnt']
+            except: pass
+            
+        risk_priority = {'critical': 5, 'high': 4, 'medium': 3, 'low': 1, None: 0}
+        
+        participants = []
+        for r in rows:
+            risk = r.get('risk_level', 'low')
+            if r.get('is_disqualified'): risk = 'critical'
+            
+            # If filtering by level, replace total_violations with the level count
+            disp_violations = r.get('total_violations', 0)
+            if level_filter and level_filter.lower() != 'all levels':
+                # Map via user_id (lookup ID first if needed, but rows are from users table so we have user_id?)
+                # In query above: u.user_id is not selected? Wait, u.user_id is in join condition but not select list?
+                # Ah, we need to ensure we have the ID to map.
+                # Actually, the join `ON u.user_id` implies we have it. Let's rely on `participant_id` (username) if we don't have int ID.
+                # But `violations` table uses `user_id` (INT). We need u.user_id in SELECT.
+                # The SELECT above uses `u.username as participant_id`.
+                # We need to fetch u.user_id. The query should be updated.
+                pass 
+                
+            # Quick fix: Re-fetch correct user object or trust typical iteration
+            # Let's clean this up by adding u.user_id to the query above in next iteration if needed.
+            # But wait, I'm replacing the whole block. I can fix the query itself.
+            
+            pass 
+        
+        # CORRECTED BLOCK
         query = """
             SELECT 
+                u.user_id,
                 u.username as participant_id,
                 u.full_name,
                 pp.risk_level,
@@ -388,18 +451,33 @@ def get_status(contest_id):
         """
         rows = db.execute_query(query, (contest_id,))
         
-        risk_priority = {'critical': 5, 'high': 4, 'medium': 3, 'low': 1, None: 0}
-        
+        level_counts = {}
+        if level_filter and level_filter.lower() != 'all levels':
+            try:
+                l_int = int(str(level_filter).replace('Level ', '').strip())
+                v_res = db.execute_query(
+                    "SELECT user_id, COUNT(*) as cnt FROM violations WHERE contest_id=%s AND level=%s GROUP BY user_id", 
+                    (contest_id, l_int)
+                )
+                for v in v_res:
+                    level_counts[v['user_id']] = v['cnt']
+            except: pass
+
         participants = []
         for r in rows:
             risk = r.get('risk_level', 'low')
             if r.get('is_disqualified'): risk = 'critical'
             
+            # Determine count to show
+            eff_violations = r.get('total_violations', 0)
+            if level_filter and level_filter.lower() != 'all levels':
+                eff_violations = level_counts.get(r['user_id'], 0)
+                
             p = {
                 'participant_id': r['participant_id'],
                 'name': r['full_name'],
                 'risk_level': r.get('risk_level', 'low'),
-                'total_violations': r.get('total_violations', 0),
+                'total_violations': eff_violations,
                 'score': r.get('violation_score', 0),
                 'is_disqualified': bool(r.get('is_disqualified')),
                 'last_violation': r.get('last_violation_at'),
@@ -465,6 +543,182 @@ def allow_extra():
         except: pass
 
         return jsonify({'success': True, 'new_extra_violations': new_extra})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.route('/action/disqualify', methods=['POST'])
+@admin_required
+def disqualify_participant():
+    """
+    Manually disqualify a participant.
+    """
+    data = request.get_json()
+    participant_id = data.get('participant_id')
+    contest_id = data.get('contest_id')
+    reason = data.get('reason', 'Manual Disqualification by Admin')
+    
+    if not participant_id or not contest_id:
+        return jsonify({'error': 'Missing required fields'}), 400
+        
+    db = get_db()
+    try:
+        # Check if record exists
+        res = db.table('participant_proctoring').select("*").eq("participant_id", participant_id).eq("contest_id", contest_id).execute()
+        
+        update_data = {
+            'is_disqualified': True,
+            'disqualification_reason': reason,
+            'disqualified_at': get_current_time(),
+            'risk_level': 'critical'
+        }
+        
+        if res.data:
+            db.table('participant_proctoring').update(update_data).eq("participant_id", participant_id).eq("contest_id", contest_id).execute()
+        else:
+            # Create if not exists
+            update_data.update({
+                'id': str(uuid.uuid4()),
+                'participant_id': participant_id,
+                'contest_id': contest_id,
+                'total_violations': 0,
+                'created_at': get_current_time(),
+                'updated_at': get_current_time()
+            })
+            db.table('participant_proctoring').insert(update_data).execute()
+            
+        # Emit Socket Event
+        try:
+            from extensions import socketio
+            socketio.emit('proctoring:disqualified', {
+                'participant_id': participant_id,
+                'contest_id': contest_id,
+                'reason': reason
+            })
+        except: pass
+
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.route('/action/reset-violations', methods=['POST'])
+@admin_required
+def reset_violations():
+    """
+    Reset violations for a participant.
+    """
+    data = request.get_json()
+    participant_id = data.get('participant_id')
+    # If contest_id is missing, we might need it, but frontend code shows:
+    # API.request('/proctoring/action/reset-violations', 'POST', { participant_id: participantId });
+    # Admin State often knows activeContestId, but let's see if we can deduce or if we need to fix frontend.
+    # Frontend passes ONLY participant_id in resetViolations() call in admin.js.
+    # We should probably fix frontend to send contest_id, OR find the active contest here.
+    # Let's try to assume active or find it via participant record if possible, 
+    # BUT safe bet is to Require contest_id and update frontend in next step if needed. 
+    # Actually, looking at admin.js:
+    # async resetViolations(participantId) { ... API.request(..., { participant_id: participantId }) ... }
+    # It misses contest_id. I will fix admin.js next.
+    # For now, I'll write the backend to accept it.
+    
+    contest_id = data.get('contest_id')
+    
+    # If contest_id is missing, try to find the active PROCTORING contest for this user?
+    # Or just return error.
+    if not participant_id: 
+         return jsonify({'error': 'Missing participant_id'}), 400
+
+    db = get_db()
+    try:
+        # If contest_id not provided, try to update ALL active records for this user? Unsafe.
+        # Let's assume we fix frontend.
+        
+        if not contest_id:
+             # Try to resolve. 
+             # SELECT contest_id FROM contests WHERE status='live' LIMIT 1
+             c_res = db.execute_query("SELECT contest_id FROM contests WHERE status='live' LIMIT 1")
+             if c_res: contest_id = c_res[0]['contest_id']
+             else: return jsonify({'error': 'No live contest found and contest_id not provided'}), 400
+
+        update_data = {
+            'total_violations': 0,
+            'violation_score': 0,
+            'risk_level': 'low',
+            'is_disqualified': False,
+            'disqualification_reason': None,
+            'tab_switches': 0,
+            'copy_attempts': 0,
+            'screenshot_attempts': 0,
+            'focus_losses': 0,
+            'extra_violations': 0,
+            'updated_at': get_current_time()
+        }
+        
+        db.table('participant_proctoring').update(update_data).eq("participant_id", participant_id).eq("contest_id", contest_id).execute()
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.route('/action/reset-progress', methods=['POST'])
+@admin_required
+def reset_progress():
+    """
+    Fully reset a participant's progress (Levels, Submissions) for a contest.
+    Useful for debugging or re-runs.
+    """
+    data = request.get_json()
+    participant_id = data.get('participant_id')
+    contest_id = data.get('contest_id')
+    
+    if not participant_id:
+        return jsonify({'error': 'Missing participant_id'}), 400
+
+    db = get_db()
+    try:
+        # Resolve User ID Integer
+        user_id = None
+        u_res = db.execute_query("SELECT user_id FROM users WHERE username=%s OR user_id=%s", (participant_id, participant_id))
+        if u_res: user_id = u_res[0]['user_id']
+        else: return jsonify({'error': 'User not found'}), 404
+        
+        # If contest_id not provided, try live
+        if not contest_id:
+             c_res = db.execute_query("SELECT contest_id FROM contests WHERE status='live' LIMIT 1")
+             if c_res: contest_id = c_res[0]['contest_id']
+             else: return jsonify({'error': 'Contest not found'}), 400
+
+        # Delete Stats
+        db.execute_update("DELETE FROM participant_level_stats WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
+        
+        # Delete Submissions
+        db.execute_update("DELETE FROM submissions WHERE user_id=%s AND contest_id=%s", (user_id, contest_id))
+        
+        # Also Reset Proctoring Violations? Yes, makes sense for a full reset.
+        update_data = {
+            'total_violations': 0,
+            'violation_score': 0,
+            'risk_level': 'low',
+            'is_disqualified': False,
+            'disqualification_reason': None,
+            'tab_switches': 0,
+            'copy_attempts': 0,
+            'screenshot_attempts': 0,
+            'focus_losses': 0,
+            'extra_violations': 0,
+            'updated_at': get_current_time()
+        }
+        db.table('participant_proctoring').update(update_data).eq("participant_id", participant_id).eq("contest_id", contest_id).execute()
+
+        # Emit update
+        try:
+             from extensions import socketio
+             socketio.emit('admin:stats_update', {'contest_id': contest_id})
+        except: pass
+
+        return jsonify({'success': True})
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -6,7 +6,7 @@ load_dotenv()
 class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev_secret_key')
     FLASK_ENV = os.getenv('FLASK_ENV', 'development')
-    DEBUG = os.getenv('FLASK_DEBUG', 'True') == 'True'
+    DEBUG = os.getenv('FLASK_DEBUG', 'False') == 'True'
     
     # Supabase
     SUPABASE_URL = os.getenv('SUPABASE_URL')

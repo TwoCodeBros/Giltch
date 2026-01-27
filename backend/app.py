@@ -100,5 +100,5 @@ def create_app(config_class=Config):
 
 if __name__ == '__main__':
     app = create_app()
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
+    socketio.run(app, debug=app.config['DEBUG'], host='0.0.0.0', port=5000, allow_unsafe_werkzeug=app.config['DEBUG'])
     # Database configuration updated to debug_marathon_v3 - Force Reload

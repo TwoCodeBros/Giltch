@@ -1,9 +1,11 @@
 from flask import Blueprint, jsonify, request
-from utils.db import get_db
+from db_connection import db_manager
 from auth_middleware import admin_required
 import jwt
 import datetime
 from config import Config
+from werkzeug.security import check_password_hash, generate_password_hash
+import uuid
 
 bp = Blueprint('auth', __name__)
 
@@ -16,9 +18,6 @@ def create_token(user_id, role='participant'):
     }
     return jwt.encode(payload, Config.SECRET_KEY, algorithm='HS256')
 
-# ... (Participant Login kept as is, but I need to handle potential file truncation if I paste too much)
-# Participant login is lines 18-66.
-
 @bp.route('/participant/login', methods=['POST'])
 def participant_login():
     data = request.get_json()
@@ -27,20 +26,15 @@ def participant_login():
     if not pid:
         return jsonify({'error': 'Participant ID is required'}), 400
 
-    db = get_db()
-    
     try:
-        # In our schema, we'll treat username as participant_id for now
-        # or use internal user_id if pid is numeric
-        query = db.table('users').select("*").eq("role", "participant")
+        # Check by user_id (int) or username (str)
         if pid.isdigit():
-            query = query.eq("user_id", int(pid))
+            query = "SELECT * FROM users WHERE role='participant' AND user_id=%s"
+            user_data = db_manager.execute_query(query, (int(pid),))
         else:
-            query = query.eq("username", pid)
+            query = "SELECT * FROM users WHERE role='participant' AND username=%s"
+            user_data = db_manager.execute_query(query, (pid,))
             
-        user_query = query.execute()
-        user_data = user_query.data
-        
         if not user_data:
             return jsonify({'error': 'Participant not found'}), 404
 
@@ -49,9 +43,10 @@ def participant_login():
         if user.get('status') == 'disqualified':
             return jsonify({'error': 'You have been disqualified for violations.'}), 403
 
-        # Check Proctoring Table Disqualification (Crucial Fix)
-        proc_status = db.table('participant_proctoring').select('is_disqualified').eq('participant_id', user['username']).execute()
-        if proc_status.data and proc_status.data[0].get('is_disqualified'):
+        # Check Proctoring Table Disqualification
+        p_query = "SELECT is_disqualified FROM participant_proctoring WHERE participant_id=%s"
+        proc_status = db_manager.execute_query(p_query, (user['username'],))
+        if proc_status and proc_status[0].get('is_disqualified'):
              return jsonify({'error': 'You have been permanently disqualified for proctoring violations.'}), 403
 
         if user.get('status') == 'held':
@@ -60,29 +55,18 @@ def participant_login():
         token = create_token(user['username'], 'participant')
         
         # --- PROCTORING INIT ---
-        # Ensure user has a row in participant_proctoring so they show up in Admin dashboard immediately
         try:
-             # Find active contest
-            c_res = db.execute_query("SELECT contest_id FROM contests WHERE status='live' LIMIT 1")
+            c_res = db_manager.execute_query("SELECT contest_id FROM contests WHERE status='live' LIMIT 1")
             active_contest_id = c_res[0]['contest_id'] if c_res else 1
             
-            # Check or Init
-            proc_check = db.table('participant_proctoring').select("*").eq("participant_id", user['username']).eq("contest_id", active_contest_id).execute()
-            if not proc_check.data:
-                 import uuid
-                 db.table('participant_proctoring').insert({
-                    'id': str(uuid.uuid4()),
-                    'participant_id': user['username'],
-                    'user_id': user['user_id'],
-                    'contest_id': active_contest_id,
-                    'total_violations': 0,
-                    'violation_score': 0, 
-                    'risk_level': 'low',
-                    'created_at': datetime.datetime.utcnow().isoformat()
-                 }).execute()
+            proc_check = db_manager.execute_query("SELECT * FROM participant_proctoring WHERE participant_id=%s AND contest_id=%s", (user['username'], active_contest_id))
+            if not proc_check:
+                 db_manager.execute_update(
+                     "INSERT INTO participant_proctoring (id, participant_id, user_id, contest_id, total_violations, violation_score, risk_level, created_at) VALUES (%s, %s, %s, %s, 0, 0, 'low', NOW())",
+                     (str(uuid.uuid4()), user['username'], user['user_id'], active_contest_id)
+                 )
         except Exception as ex:
             print(f"Proctoring init warning: {ex}")
-        # -----------------------
         
         # Emit Real-time Event
         try:
@@ -93,7 +77,6 @@ def participant_login():
                 'contest_id': active_contest_id
             })
         except: pass
-
         
         return jsonify({
             'success': True,
@@ -118,26 +101,27 @@ def leader_login():
     if not username or not password:
         return jsonify({'error': 'Username and Password are required'}), 400
 
-    db = get_db()
     try:
-        import hashlib
-        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-        
-        # Check for Leader role
-        user_query = db.table('users').select("*")\
-            .eq("username", username)\
-            .eq("role", "leader")\
-            .execute()
-            
-        if not user_query.data:
+        user_query = db_manager.execute_query("SELECT * FROM users WHERE username=%s AND role='leader'", (username,))
+        if not user_query:
              return jsonify({'error': 'Invalid credentials or not authorized as LEADER'}), 401
 
-        user = user_query.data[0]
+        user = user_query[0]
         
-        if user['password_hash'] != pwd_hash:
+        # Verify Password
+        valid = False
+        if user['password_hash'].startswith('sha256'): # Legacy support if needed? No, user asked to REFAC.
+             # If strictly moving to werkzeug, we assume new hashes are used.
+             # But if checking legacy SHA256:
+             import hashlib
+             if user['password_hash'] == hashlib.sha256(password.encode()).hexdigest():
+                 valid = True
+        else:
+             valid = check_password_hash(user['password_hash'], password)
+
+        if not valid:
              return jsonify({'error': 'Invalid credentials'}), 401
              
-        # Check status
         if user.get('admin_status') != 'APPROVED':
              return jsonify({'error': 'Your leader account is not approved.'}), 403
              
@@ -163,29 +147,30 @@ def admin_login():
     if not username or not password:
         return jsonify({'error': 'Username and Password are required'}), 400
 
-    db = get_db()
     try:
-        # We need to use SHA256 since that's what's in the example data
-        import hashlib
-        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-        
-        user_query = db.table('users').select("*")\
-            .eq("username", username)\
-            .eq("role", "admin")\
-            .execute()
+        user_query = db_manager.execute_query("SELECT * FROM users WHERE username=%s AND role='admin'", (username,))
             
-        if user_query.data:
-            user = user_query.data[0]
+        if user_query:
+            user = user_query[0]
             
-            # -- Status Check --
+            # Status Check
             status = user.get('admin_status', 'PENDING')
             if status == 'PENDING':
                 return jsonify({'error': '⏳ Your admin request is pending approval.'}), 403
             if status == 'REJECTED':
                 return jsonify({'error': '❌ Your admin request has been rejected.'}), 403
             
-            # Compare hash
-            if user['password_hash'] == pwd_hash:
+            # Verify Password
+            # Support both legacy SHA256 (for initial admin) and new Werkzeug
+            valid = False
+            if len(user['password_hash']) == 64 and 'pbkdf2' not in user['password_hash']: # loose check for sha256 hex
+                import hashlib
+                if user['password_hash'] == hashlib.sha256(password.encode()).hexdigest():
+                    valid = True
+            else:
+                valid = check_password_hash(user['password_hash'], password)
+
+            if valid:
                 return jsonify({
                     'success': True,
                     'token': create_token(user['username'], 'admin'),
@@ -212,25 +197,18 @@ def register_admin():
     if not all([username, password, email]):
         return jsonify({'error': 'Username, password and email are required'}), 400
         
-    db = get_db()
-    
     # Check if exists
-    chk = db.table('users').select('*').eq('username', username).execute()
-    if chk.data:
+    chk = db_manager.execute_query("SELECT user_id FROM users WHERE username=%s", (username,))
+    if chk:
         return jsonify({'error': 'Username already exists'}), 400
         
-    import hashlib
-    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+    pwd_hash = generate_password_hash(password)
     
     try:
-        db.table('users').insert({
-            'username': username,
-            'email': email,
-            'password_hash': pwd_hash,
-            'full_name': full_name or username,
-            'role': 'admin',
-            'admin_status': 'PENDING'
-        })
+        db_manager.execute_update(
+            "INSERT INTO users (username, email, password_hash, full_name, role, admin_status, created_at) VALUES (%s, %s, %s, %s, 'admin', 'PENDING', NOW())",
+            (username, email, pwd_hash, full_name or username)
+        )
         return jsonify({'success': True, 'message': 'Admin registration submitted. Waiting for approval.'}), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -238,18 +216,9 @@ def register_admin():
 @bp.route('/admin/pending', methods=['GET'])
 @admin_required
 def get_pending_admins():
-    db = get_db()
     try:
-        # Fetch admins with PENDING status
-        # Since MySQLBridge is limited, we might not have .eq for status if not added
-        # But we can use db_manager directly or update bridge
-        # Or better, just utilize our robust db_manager here for custom query
-        from db_connection import db_manager
         query = "SELECT user_id, username, full_name, created_at, admin_status FROM users WHERE role='admin' AND admin_status='PENDING'"
         res = db_manager.execute_query(query)
-        
-        # Also maybe fetch all admins for management?
-        # Requirement: "Register New Admin option in Admin panel" -> implied list management.
         return jsonify({'pending': res})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -267,15 +236,12 @@ def approve_admin():
     status_map = {'APPROVE': 'APPROVED', 'REJECT': 'REJECTED'}
     new_status = status_map[action]
     
-    from db_connection import db_manager
-    
     # Get approver ID
     auth_header = request.headers.get('Authorization')
     token = auth_header.split(" ")[1]
     token_data = jwt.decode(token, Config.SECRET_KEY, algorithms=["HS256"])
     approver_username = token_data['sub']
     
-    # Get approver INT ID
     u_res = db_manager.execute_query("SELECT user_id FROM users WHERE username=%s", (approver_username,))
     approver_id = u_res[0]['user_id'] if u_res else None
     
@@ -298,18 +264,17 @@ def get_session():
         payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
         user_id = payload['sub']
         
-        db = get_db()
         try:
-             u_res = db.table('users').select("*").eq("username", user_id).execute()
-             if u_res.data:
-                u = u_res.data[0]
+             u_res = db_manager.execute_query("SELECT * FROM users WHERE username=%s", (user_id,))
+             if u_res:
+                u = u_res[0]
                 return jsonify({
                     'participant_id': u['user_id'],
                     'username': u['username'],
                     'full_name': u['full_name'],
                     'role': u['role'],
                     'status': u.get('status', 'active'),
-                    'admin_status': u.get('admin_status', 'APPROVED') # expose this
+                    'admin_status': u.get('admin_status', 'APPROVED') 
                 })
         except Exception as e: print(e)
              

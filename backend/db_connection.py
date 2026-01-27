@@ -4,13 +4,15 @@
 import logging
 import os
 import configparser
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("db_operations.log"),
         logging.StreamHandler()
     ]
 )
@@ -42,30 +44,48 @@ class MySQLManager:
             config_path = os.path.join(os.path.dirname(__file__), 'db_config.ini')
             
             base_config = {
-                "host": "localhost",
-                "port": 3306,
-                "user": "root",
-                "password": "",
+                "host": os.getenv('DB_HOST', 'localhost'),
+                "port": int(os.getenv('DB_PORT', 3306)),
+                "user": os.getenv('DB_USER', 'root'),
+                "password": os.getenv('DB_PASSWORD', ''),
                 "charset": "utf8mb4",
                 "collation": "utf8mb4_unicode_ci"
             }
+            
+            # Ini overrides defaults, but ENV should override INI in a pure 12-factor app?
+            # User Task: "Move the database root password... into a .env file... load them."
+            # So Env > Ini.
             
             if os.path.exists(config_path):
                 config.read(config_path)
                 if 'mysql' in config:
                     read_config = dict(config['mysql'])
+                    # Filter keys
                     for key in ['pool_name', 'pool_size', 'pool_reset_session']:
                         read_config.pop(key, None)
+                    # Update base with INI? No, Env should win.
+                    # Logic: Base (Env or Default) -> Update with INI (Legacy) -> Override with explicit Env if present?
+                    # Let's assume INI is legacy/local. ENV is prod.
+                    # If Env vars are set, they satisfy base_config.
+                    # Let's just use Env vars if they exist, else INI.
+                    # Simple way: Load INI first, then Env overrides.
                     base_config.update(read_config)
 
-            target_db = database or base_config.pop('database', 'debug_marathon')
+            # Override with Env if explicitly set (Reloading Env to be sure)
+            if os.getenv('DB_HOST'): base_config['host'] = os.getenv('DB_HOST')
+            if os.getenv('DB_USER'): base_config['user'] = os.getenv('DB_USER')
+            if os.getenv('DB_PASSWORD') is not None: base_config['password'] = os.getenv('DB_PASSWORD')
+            if os.getenv('DB_NAME'): base_config['database'] = os.getenv('DB_NAME')
+            
+            target_db = database or base_config.pop('database', 'debug_marathon_v3')
+
 
             try:
                 full_config = base_config.copy()
                 full_config['database'] = target_db
                 self.pool = mysql.connector.pooling.MySQLConnectionPool(
                     pool_name="debug_marathon_pool",
-                    pool_size=5,
+                    pool_size=30,
                     pool_reset_session=True,
                     **full_config
                 )
@@ -76,7 +96,7 @@ class MySQLManager:
                     base_config.pop('database', None)
                     self.pool = mysql.connector.pooling.MySQLConnectionPool(
                         pool_name="debug_marathon_pool",
-                        pool_size=5,
+                        pool_size=30,
                         pool_reset_session=True,
                         **base_config
                     )

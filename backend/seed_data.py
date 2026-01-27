@@ -1,217 +1,116 @@
 
-import hashlib
-import time
-import random
-import uuid
-from db_connection import db_manager
+# seed_data.py
 
-def get_hash(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+from db_connection import db_manager
+import datetime
+import json
+import traceback
 
 def seed_data():
-    print("--- SEEDING SAMPLE DATA ---")
+    print("Beginning Seed Data...")
     
-    print("1. Seeding Users...")
-    
-    # --- ADMIN ---
-    db_manager.upsert(
-        'users',
-        {
-            'username': 'admin',
-            'email': 'admin@debug.com',
-            'password_hash': get_hash('admin123'),
-            'role': 'admin',
-            'full_name': 'System Administrator',
-            'admin_status': 'APPROVED',
-            'status': 'active'
-        },
-        ['username'] 
-    )
-    
-    # --- LEADER ---
-    db_manager.upsert(
-        'users',
-        {
-            'username': 'leader',
-            'email': 'leader@debug.com',
-            'password_hash': get_hash('leader123'),
-            'role': 'leader',
-            'full_name': 'Contest Leader',
-            'admin_status': 'APPROVED',
-            'status': 'active',
-            'department': 'Coordinator',
-            'college': 'Main Campus'
-        },
-        ['username']
-    )
+    # Define Queries
+    queries = {
+        'create_contest': """
+            INSERT INTO contests (contest_name, description, start_datetime, end_datetime, status, max_violations_allowed)
+            VALUES ('Debug Marathon 2026', 'Fix the glitches to win!', '2026-01-26 10:00:00', '2026-01-27 10:00:00', 'live', 50)
+        """,
+        'create_round': """
+            INSERT INTO rounds (contest_id, round_name, round_number, time_limit_minutes, total_questions, status, is_locked, allowed_language)
+            VALUES (?, 'Level 1 - Basics', 1, 60, 2, 'active', 0, 'python')
+        """,
+        'create_user': """
+            INSERT INTO users (username, email, password_hash, full_name, role)
+            VALUES ('PART001', 'part001@example.com', 'scrypt:32768:8:1$dummyhash', 'Participant One', 'participant')
+        """,
+        'create_question_1': """
+            INSERT INTO questions (round_id, question_number, question_title, question_description, buggy_code, expected_output, test_cases, difficulty_level, points)
+            VALUES (?, 1, 'Fix the Sum', 'The function should return the sum of two numbers, but it subtracts them.', 
+            'def solve(a, b):\n    return a - b\n\nif __name__ == "__main__":\n    import sys\n    input = sys.stdin.read\n    data = input().split()\n    # Assume inputs are provided line by line or space separated\n    # For simplicity of test runner:\n    pass', 
+            '5', 
+            ?, 
+            'Easy', 10)
+        """,
+        'create_question_2': """
+            INSERT INTO questions (round_id, question_number, question_title, question_description, buggy_code, expected_output, test_cases, difficulty_level, points)
+            VALUES (?, 2, 'Array Reverse', 'Reverse the array but it returns sorted array.', 
+            'def solve(arr):\n    return sorted(arr)\n', 
+            '[3, 2, 1]', 
+            ?, 
+            'Easy', 20)
+        """
+    }
 
-    # --- PARTICIPANTS ---
-    participants = [
-        ('URK23CS101', 'Alice Johnson', 'CSE', 'Karunya Inst. of Tech', 'active'),
-        ('URK23CS102', 'Bob Smith', 'CSE', 'Karunya Inst. of Tech', 'active'),
-        ('URK23AI201', 'Charlie Brown', 'AI & DS', 'Karunya Inst. of Tech', 'active'),
-        ('URK23EC305', 'David Wilson', 'ECE', 'Karunya Inst. of Tech', 'disqualified'),
-        ('URK23CS103', 'Eve Anderson', 'CSE', 'Karunya Inst. of Tech', 'active'),
-        ('URK23ME401', 'Frank Miller', 'Mech', 'Karunya Inst. of Tech', 'active'),
-    ]
-
-    for p in participants:
-        pid, name, dept, college, status = p
-        email = f"{pid.lower()}@example.com"
-        db_manager.upsert(
-            'users',
-            {
-                'username': pid,
-                'email': email,
-                'password_hash': get_hash('pass123'),
-                'role': 'participant',
-                'full_name': name,
-                'department': dept,
-                'college': college,
-                'status': status
-            },
-            ['username']
-        )
-        
-    print("Users seeded.")
-
-    # 2. Contest
-    print("2. Seeding Contest...")
-    contest_id = 1
-    # Check if a live contest exists
-    res = db_manager.execute_query("SELECT contest_id FROM contests WHERE status='live' LIMIT 1")
-    if res:
-        contest_id = res[0]['contest_id']
-    else:
-        # Create one
-        start = time.strftime('%Y-%m-%d %H:%M:%S')
-        end = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time() + 86400*30))
-        ret = db_manager.execute_update("""
-            INSERT INTO contests (contest_name, description, start_datetime, end_datetime, status, is_active)
-            VALUES ('Debug Marathon 2026', 'End-to-End Test Contest', %s, %s, 'live', 1)
-        """, (start, end))
-        if ret and ret.get('last_id'): contest_id = ret['last_id']
+    try:
+        # Check if contest exists
+        existing_contests = db_manager.execute_query("SELECT contest_id FROM contests")
+        contest_id = 1
+        if not existing_contests:
+            print("Creating Contest...")
+            res = db_manager.execute_update(queries['create_contest'])
+            contest_id = res['last_id']
         else:
-             # Just query it back if insert succeeded but no last_id (SQLite sometimes)
-             res = db_manager.execute_query("SELECT contest_id FROM contests ORDER BY contest_id DESC LIMIT 1")
-             if res: contest_id = res[0]['contest_id']
+            contest_id = existing_contests[0]['contest_id']
+            print(f"Contest exists: ID {contest_id}")
 
-    # 3. Rounds & Questions
-    print(f"3. Seeding Rounds & Questions for Contest {contest_id}...")
-    
-    for level in range(1, 4):
-        status = 'active'
-        db_manager.upsert(
-            'rounds',
-            {
-                'contest_id': contest_id,
-                'round_name': f"Level {level}",
-                'round_number': level,
-                'time_limit_minutes': 45,
-                'total_questions': 2,
-                'status': status,
-                'is_locked': 0
-            },
-            ['contest_id', 'round_number']
-        )
-        
-        r_res = db_manager.execute_query("SELECT round_id FROM rounds WHERE contest_id=%s AND round_number=%s", (contest_id, level))
-        if not r_res: continue
-        round_id = r_res[0]['round_id']
-        
-        questions = [
-            {'num': 1, 'title': f"L{level} - Syntax Fix", 'desc': "Fix syntax.", 'code': "def solve():\n  print 'hello'", 'diff': 'easy', 'out': 'hello'},
-            {'num': 2, 'title': f"L{level} - Logic Bug", 'desc': "Fix logic.", 'code': "def add(a,b):\n  return a-b", 'diff': 'medium', 'out': '3'}
-        ]
-        
-        for q in questions:
-            db_manager.upsert(
-                'questions',
-                {
-                    'round_id': round_id,
-                    'question_number': q['num'],
-                    'question_title': q['title'],
-                    'question_description': q['desc'],
-                    'buggy_code': q['code'],
-                    'difficulty_level': q['diff'],
-                    'points': 10,
-                    'expected_output': q['out']
-                },
-                ['round_id', 'question_number']
-            )
+        # Check if round exists
+        existing_rounds = db_manager.execute_query("SELECT round_id FROM rounds WHERE contest_id=%s AND round_number=1", (contest_id,))
+        round_id = 1
+        if not existing_rounds:
+            print("Creating Round 1...")
+            # For SQLite, use params as tuple
+            res = db_manager.execute_update("INSERT INTO rounds (contest_id, round_name, round_number, time_limit_minutes, total_questions, status, is_locked, allowed_language) VALUES (%s, 'Level 1 - Basics', 1, 60, 2, 'active', 0, 'python')", (contest_id,))
+            round_id = res['last_id']
+        else:
+            round_id = existing_rounds[0]['round_id']
+            print(f"Round 1 exists: ID {round_id}")
 
-    # 4. Simulation
-    print("4. Seeding Submissions & Results...")
-    u_map = {}
-    u_res = db_manager.execute_query("SELECT user_id, username FROM users WHERE role='participant'")
-    if u_res:
-        for u in u_res:
-            u_map[u['username']] = u['user_id']
-        
-    participant_data = [
-        {'user': 'URK23CS101', 'levels': [1, 2], 'score_base': 10, 'violations': 0},
-        {'user': 'URK23CS102', 'levels': [1], 'score_base': 8, 'violations': 3},
-        {'user': 'URK23CS103', 'levels': [], 'score_base': 0, 'violations': 0},
-        {'user': 'URK23EC305', 'levels': [1], 'score_base': 5, 'violations': 15}
-    ]
+        # Check if user exists
+        existing_users = db_manager.execute_query("SELECT user_id FROM users WHERE username='PART001'")
+        if not existing_users:
+            print("Creating User PART001...")
+            db_manager.execute_update(queries['create_user'])
+        else:
+            print("User PART001 exists")
 
-    for p in participant_data:
-        uid = u_map.get(p['user'])
-        if not uid: continue
+        # Check questions
+        existing_q = db_manager.execute_query("SELECT question_id FROM questions WHERE round_id=%s", (round_id,))
         
-        total_score = 0
-        
-        # Proctoring - Handle UUID in python
-        # UUID() is SQL. uuid.uuid4() is Python
-        db_manager.upsert(
-            'participant_proctoring',
-            {
-                'id': str(uuid.uuid4()),
-                'participant_id': p['user'],
-                'user_id': uid,
-                'contest_id': contest_id,
-                'total_violations': p['violations'],
-                'violation_score': p['violations']*2,
-                'risk_level': 'critical' if p['violations'] > 10 else ('medium' if p['violations'] > 2 else 'low'),
-                'is_disqualified': 1 if p['violations'] > 10 else 0
-            },
-            ['participant_id', 'contest_id']
-        )
-        
-        for lvl in p['levels']:
-            score = p['score_base'] * 2
-            total_score += score
+        if not existing_q:
+            print("Creating Questions...")
+            # Q1 Test Cases
+            tcs1 = json.dumps([
+                {"input": "2 3", "expected": "5"},
+                {"input": "10 5", "expected": "15"}
+            ])
+            # Buggy Code for Q1
+            buggy1 = "import sys\n\ndef solve(a, b):\n    return a - b  # Bug: should be a + b\n\nif __name__ == '__main__':\n    # Simple runner\n    line = sys.stdin.read().strip()\n    if line:\n        parts = line.split()\n        if len(parts) >= 2:\n            print(solve(int(parts[0]), int(parts[1])))"
             
-            db_manager.upsert(
-                'participant_level_stats',
-                {
-                    'user_id': uid,
-                    'contest_id': contest_id,
-                    'level': lvl,
-                    'status': 'COMPLETED',
-                    'questions_solved': 2,
-                    'level_score': score,
-                    'violation_count': 0 if p['user'] == 'Alice' else p['violations']
-                },
-                ['user_id', 'contest_id', 'level']
-            )
-            
-            # Submissions... skipping detail for brevity unless critical
-            # Just seeding leaderboard is enough for demo
-            
-        db_manager.upsert(
-            'leaderboard',
-            {
-                'user_id': uid,
-                'contest_id': contest_id,
-                'total_score': total_score,
-                'current_round': max(p['levels']) + 1 if p['levels'] else 1,
-                'violations_count': p['violations']
-            },
-            ['user_id', 'contest_id']
-        )
+            db_manager.execute_update("""
+                INSERT INTO questions (round_id, question_number, question_title, question_description, buggy_code, expected_output, test_cases, difficulty_level, points, test_input)
+                VALUES (%s, 1, 'Fix the Sum', 'The function should return the sum of two numbers, but it subtracts them.', %s, '5', %s, 'Easy', 10, '2 3')
+            """, (round_id, buggy1, tcs1))
 
-    print("Seeding Complete!")
+            # Q2
+            tcs2 = json.dumps([
+                {"input": "1,2,3", "expected": "[3, 2, 1]"},
+                {"input": "5,1,9", "expected": "[9, 1, 5]"}
+            ])
+            buggy2 = "import sys\nimport ast\n\ndef solve(arr):\n    return sorted(arr) # Bug: should reverse\n\nif __name__ == '__main__':\n    input_str = sys.stdin.read().strip()\n    if input_str:\n        arr = [int(x) for x in input_str.split(',')]\n        print(solve(arr))"
+
+            db_manager.execute_update("""
+                INSERT INTO questions (round_id, question_number, question_title, question_description, buggy_code, expected_output, test_cases, difficulty_level, points, test_input)
+                VALUES (%s, 2, 'Array Reverse', 'Reverse the array.', %s, '[3, 2, 1]', %s, 'Easy', 20, '1,2,3')
+            """, (round_id, buggy2, tcs2))
+            
+        else:
+            print("Questions exist")
+            
+        print("Seed Data Completed Successfully.")
+
+    except Exception as e:
+        print(f"Seed Data Failed: {e}")
+        traceback.print_exc()
 
 if __name__ == "__main__":
     seed_data()

@@ -1,13 +1,13 @@
 from flask import Blueprint, jsonify, request
-import subprocess
-import tempfile
-import os
 import uuid
 import datetime
+import time
 import json
 import traceback
 from db_connection import db_manager
 from auth_middleware import admin_required
+from utils.logic import execute_code_internal
+from utils.contest_service import activate_level_logic, complete_level_logic, advance_level_logic
 
 bp = Blueprint('contest', __name__)
 
@@ -256,127 +256,26 @@ def update_round(contest_id, round_number):
 
     return jsonify({'success': True})
 
+
+from utils.logic import execute_code_internal, create_question_logic
+
+# ... (Imports)
+
 @bp.route('/<contest_id>/rounds/<int:round_number>/question', methods=['POST'])
 @admin_required
 def create_round_question(contest_id, round_number):
-    data = request.get_json()
-    
-    # 1. Get Round ID and Allowed Language
-    r_query = "SELECT round_id, allowed_language FROM rounds WHERE contest_id=%s AND round_number=%s"
-    r_res = db_manager.execute_query(r_query, (contest_id, round_number))
-    if not r_res:
-        return jsonify({'error': 'Round not found'}), 404
-    round_id = r_res[0]['round_id']
-    
-    # 2. Insert Question
-    q_query = """
-        INSERT INTO questions 
-        (round_id, question_number, question_title, question_description, expected_output, buggy_code, difficulty_level, points, test_cases)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """
-    
-    # Default values
-    points = data.get('points', 10)
-    test_cases = json.dumps(data.get('test_cases', []))
-    difficulty = data.get('difficulty', 'Level 1')
-    
-    # Use config language if available for boilerplate selection, fallback to 'python'
-    language = r_res[0].get('allowed_language') or data.get('language', 'python')
-    
-    time_limit = data.get('time_limit', 20)
-    
-    # Helper: Update Level Duration if provided
-    if time_limit and int(time_limit) > 0:
-        db_manager.execute_update(
-            "UPDATE rounds SET time_limit_minutes=%s WHERE round_id=%s",
-            (int(time_limit), round_id)
-        )
-    
-    # Get next question number
-    count_query = "SELECT MAX(question_number) as max_num FROM questions WHERE round_id=%s"
-    count_res = db_manager.execute_query(count_query, (round_id,))
-    next_num = (count_res[0]['max_num'] or 0) + 1
-    
-    # Use accurate boilerplate for language
-    boilerplate = data.get('boilerplate', {}).get(language, '') or data.get('boilerplate', {}).get('python', '')
-    
-    db_manager.execute_update(q_query, (
-        round_id, next_num, 
-        data.get('title'), 
-        data.get('description', ''), # Mapped to question_description
-        data.get('expected_output'),
-        boilerplate, 
-        difficulty, 
-        points, 
-        test_cases
-    ))
-    
-    return jsonify({'success': True})
+    try:
+        data = request.get_json()
+        result = create_question_logic(contest_id, round_number, data)
+        return jsonify(result), 201
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
-@bp.route('/<contest_id>/rounds/<int:round_number>/question/<int:question_id>', methods=['PUT'])
-@admin_required
-def update_round_question(contest_id, round_number, question_id):
-    data = request.get_json()
-    
-    # Update Query
-    update_fields = []
-    params = []
-    
-    if 'title' in data:
-        update_fields.append("question_title=%s")
-        params.append(data['title'])
-    if 'description' in data:
-        update_fields.append("question_description=%s")
-        params.append(data['description'])
-    if 'expected_output' in data:
-        update_fields.append("expected_output=%s")
-        params.append(data['expected_output'])
-    if 'boilerplate' in data:
-        code = data['boilerplate'].get('python', '') if isinstance(data['boilerplate'], dict) else data['boilerplate']
-        update_fields.append("buggy_code=%s")
-        params.append(code)
-    if 'difficulty' in data:
-        update_fields.append("difficulty_level=%s")
-        params.append(data['difficulty'])
-    if 'test_cases' in data:
-        update_fields.append("test_cases=%s")
-        params.append(json.dumps(data['test_cases']))
-        
-    if not update_fields:
-        return jsonify({'success': True}) # Nothing to update
-        
-    query = f"UPDATE questions SET {', '.join(update_fields)} WHERE question_id=%s"
-    params.append(question_id)
-    
-    db_manager.execute_update(query, tuple(params))
-    
-    return jsonify({'success': True})
+# ...
 
-@bp.route('/<contest_id>/status', methods=['GET'])
-def get_contest_status(contest_id):
-    # Get Contest Status
-    c_query = "SELECT * FROM contests WHERE contest_id=%s"
-    c_res = db_manager.execute_query(c_query, (contest_id,))
-    if not c_res:
-        return jsonify({'error': 'Not found'}), 404
-    
-    contest = c_res[0]
-    
-    # Get stats/config
-    # We also might want the current active round/level duration
-    # Assuming 'active' round is based on time or manual flow, here we just return config.
-    
-    return jsonify({
-        'status': contest['status'],
-        'start_time': contest['start_datetime'].isoformat() if contest['start_datetime'] else None,
-        'end_time': contest['end_datetime'].isoformat() if contest['end_datetime'] else None,
-        'server_time': datetime.datetime.utcnow().isoformat(),
-        'config': {
-            'max_violations': contest.get('max_violations_allowed', 10)
-        }
-    })
+# (Removing local execute_code_internal definition completely)
 
-# === Questions & Execution ===
 
 @bp.route('/questions', methods=['GET'])
 def get_questions():
@@ -392,23 +291,28 @@ def get_questions():
             # Fallback to id=1
             contest_id = 1
 
+    # 1. Fetch Round Config strictly first (for Language)
+    round_query = "SELECT allowed_language, time_limit_minutes FROM rounds WHERE contest_id=%s AND round_number=%s"
+    r_res = db_manager.execute_query(round_query, (contest_id, level))
+    
+    allowed_lang = 'python' # Global Default
+    if r_res and r_res[0].get('allowed_language'):
+        allowed_lang = r_res[0]['allowed_language']
+
+    # 2. Fetch Questions
     query = """
-        SELECT q.*, r.round_number, r.time_limit_minutes, r.allowed_language 
+        SELECT q.*, r.round_number
         FROM questions q
         JOIN rounds r ON q.round_id = r.round_id
         WHERE r.contest_id = %s AND r.round_number = %s
+        ORDER BY q.question_number ASC
     """
-    
-    # Using strict filtering
-    query += " ORDER BY q.question_number"
     
     res = db_manager.execute_query(query, (contest_id, level))
     
     questions = []
-    allowed_lang = 'python' # Default
     
     for q in res:
-        if q.get('allowed_language'): allowed_lang = q['allowed_language']
         # Construct useful object for frontend
         tcs = []
         try:
@@ -423,10 +327,12 @@ def get_questions():
             'title': q['question_title'],
             'description': q.get('question_description', ''), 
             'expected_output': q.get('expected_output'),
-            'boilerplate': {'python': q['buggy_code']},
+            'boilerplate': {'python': q['buggy_code']}, # Use buggy_code as boilerplate
             'test_cases': tcs, 
             'difficulty': q['difficulty_level'],
-            'time_limit_minutes': q['time_limit_minutes']
+            # If question has specific override (unlikely in current schema but possible), use it? 
+            # No, strictly follow Round language.
+            'allowed_language': allowed_lang
         })
         
     return jsonify({'questions': questions, 'allowed_language': allowed_lang})
@@ -435,40 +341,61 @@ def get_questions():
 def run_code():
     data = request.get_json()
     code = data.get('code')
-    requested_language = data.get('language', 'python')
+    # language param from frontend is trust-but-verify. We prefer DB config.
+    requested_language = data.get('language', 'python') 
     question_id = data.get('question_id')
     user_id = data.get('user_id')
     contest_id = data.get('contest_id', 1) 
     level = data.get('level', 1)
     
     if not question_id:
-        print("RUN CODE ERROR: Question ID missing")
         return jsonify({'error': 'Question ID missing'}), 400
 
     print(f"RUN CODE: Fetching Question ID: {question_id} (Type: {type(question_id)})")
 
     # 1. Fetch Question & Config
-    try: qid = int(question_id)
-    except: qid = question_id
-
-    # Join with rounds to get allowed_language
+    # Join with rounds to get allowed_language STRICTLY
     query = """
-        SELECT q.test_input, q.expected_output, q.test_cases, r.allowed_language
+        SELECT q.expected_output, q.test_cases, r.allowed_language
         FROM questions q
         LEFT JOIN rounds r ON q.round_id = r.round_id
         WHERE q.question_id = %s
     """
-    q_res = db_manager.execute_query(query, (qid,))
+    
+    # Attempt 1: As provided
+    q_res = db_manager.execute_query(query, (question_id,))
+    
+    # Attempt 2: If not found, try type juggle (Int <-> String)
+    if not q_res:
+        try:
+            if str(question_id).isdigit():
+                print(f"Retrying ID {question_id} as INT...")
+                q_res = db_manager.execute_query(query, (int(question_id),))
+            else:
+                print(f"Retrying ID {question_id} as STR...")
+                q_res = db_manager.execute_query(query, (str(question_id),))
+        except: pass
+        
+    print(f"RUN CODE QUERY RES: {q_res}")
     
     if not q_res:
-        print(f"RUN CODE WARN: Question ID {qid} NOT FOUND. Defaulting to Playground Mode.")
-        question = {'test_input': '', 'expected_output': '', 'test_cases': '[]', 'allowed_language': 'python'}
-    else:
-        question = q_res[0]
+        print(f"RUN CODE WARN: Question ID {question_id} NOT FOUND in DB.")
+        return jsonify({'error': 'Question not found', 'success': False})
+    
+    question = q_res[0]
 
-    # Enforce Allowed Language
-    allowed = question.get('allowed_language') or 'python'
-    language = allowed # Force usage of configured language
+    # Enforce Allowed Language STRICTLY
+    # If round says 'c', we MUST use 'c'.
+    allowed = question.get('allowed_language')
+    if allowed:
+        language = allowed.lower()
+    else:
+        language = requested_language # Fallback only if DB empty
+
+    # Normalize Language String
+    if language in ['c', 'gcc']: language = 'c'
+    if language in ['cpp', 'g++']: language = 'cpp'
+    if language in ['py', 'python3']: language = 'python'
     
     # 2. Determine input/expected (Inputs)
     inputs = []
@@ -484,55 +411,62 @@ def run_code():
         except: pass
         
     if not inputs:
-        inputs = [{'input': '', 'expected': ''}] # Fallback
+        inputs = [{'input': '', 'expected': ''}] # Fallback to empty input
 
     # 2. Track Execution (Run Count)
     if user_id:
-        # We try to get the integer ID. If string, assume lookup needed or use as is if schema allows.
-        # Our schema uses INT for user_id. If 'PART001' passed, we need lookup.
-        # For simplicity, we assume frontend provides correct ID or we do lookup:
-        
         uid = user_id
         if isinstance(user_id, str) and not user_id.isdigit():
-             # Lookup
              u_res = db_manager.execute_query("SELECT user_id FROM users WHERE username=%s", (user_id,))
              if u_res: uid = u_res[0]['user_id']
         
-        track_query = """
-            INSERT INTO participant_level_stats (user_id, contest_id, level, run_count)
-            VALUES (%s, %s, %s, 1)
-            ON DUPLICATE KEY UPDATE run_count = run_count + 1
-        """
         try:
+            track_query = """
+                INSERT INTO participant_level_stats (user_id, contest_id, level, run_count)
+                VALUES (%s, %s, %s, 1)
+                ON DUPLICATE KEY UPDATE run_count = run_count + 1
+            """
             db_manager.execute_update(track_query, (uid, contest_id, level))
-        except Exception as e:
-            print(f"Stats error: {e}")
+        except: pass
 
-    # 3. Execute against inputs
-    results = []
-    for tc in inputs:
-        inp_str = str(tc.get('input', ''))
-        exp_str = str(tc.get('expected', '')).replace('\r\n', '\n').strip()
+    # 3. Execute Code (Sandbox Interface)
+    test_results = []
+    
+    # Run first 3 sample cases
+    sample_inputs = inputs[:3] 
+    
+    for i, case in enumerate(sample_inputs):
+        inp = case.get('input', '')
+        exp = case.get('expected', '')
         
-        exec_res = execute_code_secure(code, language, inp_str)
-        actual = exec_res['output'].replace('\r\n', '\n').strip()
+        start_t = time.time()
+        result = execute_code_internal(code, language, inp)
+        duration = time.time() - start_t
         
-        def normalize(s):
-            return "\n".join([line.strip() for line in s.splitlines() if line.strip()])
-        
-        passed = (normalize(actual) == normalize(exp_str))
-        
-        results.append({
-            'input': inp_str,
-            'expected': exp_str,
-            'output': actual,
+        passed = False
+        if result['success']:
+            output = result['output'].strip()
+            # Loose comparison (trim whitespace)
+            passed = (output == exp.strip())
+        else:
+            output = result['error']
+            
+        test_results.append({
             'passed': passed,
-            'error': exec_res['error']
+            'input': inp,
+            'output': output,
+            'expected': exp,
+            'error': result.get('error') if not result['success'] else None,
+            'duration': duration
         })
+
+    # Summary Execution Time
+    total_time = sum(r['duration'] for r in test_results)
 
     return jsonify({
         'success': True,
-        'test_results': results
+        'test_results': test_results,
+        'execution_time': f"{total_time:.3f}s"
     })
 
 @bp.route('/submit-question', methods=['POST'])
@@ -560,11 +494,29 @@ def submit_question():
     if check_res:
          return jsonify({'error': 'Already submitted successfully', 'submitted': True}), 400
 
-    # 2. Fetch Question & Inputs
-    query = "SELECT test_input, expected_output, test_cases, time_limit_minutes FROM questions WHERE question_id=%s"
+    # 2. Fetch Question & Inputs (and Language)
+    query = """
+        SELECT q.expected_output, q.test_cases, q.time_limit_minutes, r.allowed_language
+        FROM questions q
+        JOIN rounds r ON q.round_id = r.round_id
+        WHERE q.question_id = %s
+    """
     q_res = db_manager.execute_query(query, (question_id,))
     if not q_res: return jsonify({'error': 'Question not found'}), 404
     question = q_res[0]
+
+    # Enforce Allowed Language STRICTLY
+    allowed = question.get('allowed_language')
+    if allowed:
+        language = allowed.lower()
+    else:
+        language = data.get('language', 'python') # Fallback
+
+    # Normalize Language String
+    if language in ['c', 'gcc']: language = 'c'
+    if language in ['cpp', 'g++']: language = 'cpp'
+    if language in ['py', 'python3']: language = 'python'
+    if language in ['java', 'jdk']: language = 'java'
 
     # Prepare Inputs
     inputs = []
@@ -585,18 +537,27 @@ def submit_question():
     for tc in inputs:
         inp = str(tc.get('input', ''))
         exp = str(tc.get('expected', '')).replace('\r\n', '\n').strip()
-        res = execute_code_secure(code, language, inp)
-        actual = res['output'].replace('\r\n', '\n').strip()
+        
+        # Use execute_code_internal which now supports all languages
+        res = execute_code_internal(code, language, inp)
+        
+        if res['success']:
+            actual = res['output'].replace('\r\n', '\n').strip()
+        else:
+            actual = ""
         
         # Normalize for comparison
         def normalize(s):
             return "\n".join([line.strip() for line in s.splitlines() if line.strip()])
-            
-        passed = (normalize(actual) == normalize(exp))
+        
+        passed = False
+        if res['success']:
+             passed = (normalize(actual) == normalize(exp))
+             
         if not passed: all_passed = False
         
         test_results.append({
-            'input': inp, 'expected': exp, 'output': actual, 'passed': passed, 'error': res['error']
+            'input': inp, 'expected': exp, 'output': actual, 'passed': passed, 'error': res['error'] if not res['success'] else None
         })
 
     status = 'evaluated'
@@ -709,59 +670,91 @@ def get_participant_state():
         rounds_res = db_manager.execute_query(rounds_query, (contest_id,))
         rounds_map = {r['round_number']: r['status'] for r in rounds_res} if rounds_res else {}
         
-        # Force Level 1 to be ACTIVE if it exists and is pending, so users can start
         if rounds_map.get(1) == 'pending' or 1 not in rounds_map:
              rounds_map[1] = 'active'
 
-        # Fetch Global Active Level (for legacy compatibility or specific logic)
-        gl_query = "SELECT round_number, status FROM rounds WHERE contest_id=%s AND status IN ('active', 'paused') ORDER BY round_number DESC LIMIT 1"
+        # Fetch Global Active Level
+        gl_query = "SELECT round_number, status FROM rounds WHERE contest_id=%s AND status='active' ORDER BY round_number ASC LIMIT 1"
         gl_res = db_manager.execute_query(gl_query, (contest_id,))
-        global_level_data = gl_res[0] if gl_res else {'round_number': 1, 'status': 'pending'}
-        
-        cd_key = f"contest_{contest_id}_countdown"
-        cd_res = db_manager.execute_query("SELECT value FROM admin_state WHERE key_name=%s", (cd_key,))
-        
-        # Check for Unlock Condition (Shortlist) logic ONLY if we enforce strict qualification
-        # But per requirements: "When admin marks level as ACTIVE, it must automatically become unlocked".
-        # So we relax the "Elimination" check based on being behind.
+        global_active_level = gl_res[0]['round_number'] if gl_res else 1
         
         current_state = res[0] if res else None
         
-        # Get Duration
-        level_duration = 45 # Default
+        # CLAMP: Ensure user cannot be ahead of the global active round
+        if current_state and current_state['level'] > global_active_level:
+            current_state['level'] = global_active_level
+            # Reset status for this view to avoid confusion
+            current_state['status'] = 'NOT_STARTED' # Force them to 'enter' again if needed
+
+        # RESTORE: Needed for JSON response
+        global_level_data = {'round_number': global_active_level, 'status': 'active'}
+        
+        cd_key = f"contest_{contest_id}_countdown"
+        cd_res = db_manager.execute_query("SELECT value FROM admin_state WHERE key_name=%s", (cd_key,))
+
+
+        
+        # 1. Fetch TOTAL Violations and Disqualification Status
+        pr_query = "SELECT total_violations, is_disqualified, disqualification_reason FROM participant_proctoring WHERE participant_id=%s AND contest_id=%s"
+        p_res = db_manager.execute_query(pr_query, (user_id if isinstance(user_id, str) and not user_id.isdigit() else (u_res[0]['username'] if u_res else ''), contest_id))
+        
+        total_violations = 0
+        is_disqualified_state = False
+        disq_reason = None
+        
+        if p_res:
+             total_violations = p_res[0]['total_violations'] if p_res[0]['total_violations'] is not None else 0
+             is_disqualified_state = bool(p_res[0]['is_disqualified'])
+             disq_reason = p_res[0]['disqualification_reason']
+
+        # 2. Get Duration (With Strict Defaults + Admin Override)
+        def get_default_duration(l):
+            if l <= 3: return 20
+            if l == 4: return 30
+            if l == 5: return 45
+            return 45
+
+        level_duration = get_default_duration(current_state['level'] if current_state else 1)
         if current_state:
             lvl = current_state['level']
-            # Fetch round duration
             rd_res = db_manager.execute_query("SELECT time_limit_minutes FROM rounds WHERE contest_id=%s AND round_number=%s", (contest_id, lvl))
-            if rd_res:
+            if rd_res and rd_res[0]['time_limit_minutes'] and rd_res[0]['time_limit_minutes'] > 0:
                  level_duration = rd_res[0]['time_limit_minutes']
 
-        # Decode Countdown State properly
+        # 3. Decode Countdown State
         countdown_data = {'active': False}
         if cd_res:
              try:
                  countdown_data = json.loads(cd_res[0]['value'])
              except: pass
 
-        # Fetch Solved Question IDs (Fix NameError)
+        # 4. Solved Question IDs
         s_query = "SELECT question_id FROM submissions WHERE user_id=%s AND contest_id=%s AND is_correct=1"
         s_res = db_manager.execute_query(s_query, (uid, contest_id))
         solved_ids = [str(r['question_id']) for r in s_res] if s_res else []
+
+        # 5. Format Start Time (Strict UTC with Z to prevent browser drift)
+        def format_utc(dt):
+            if not dt: return None
+            # Ensure it's treated as UTC. 
+            # If the DB returned a naive object, we just add Z.
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         return jsonify({
             'success': True,
             'level': current_state['level'] if current_state else 1,
             'level_duration_minutes': level_duration,
-            'violations': current_state['violation_count'] or 0 if current_state else 0,
+            'violations': total_violations,
             'solved': current_state['questions_solved'] if current_state else 0,
             'solved_ids': solved_ids,
             'status': current_state['status'] or 'NOT_STARTED' if current_state else 'NOT_STARTED',
-            'start_time': current_state['start_time'].isoformat() if current_state and current_state['start_time'] else None,
+            'start_time': format_utc(current_state['start_time']) if current_state else None,
             'global_level': global_level_data['round_number'],
             'global_level_status': global_level_data['status'],
-            'rounds_map': rounds_map, # New Field: Status of every round from DB
+            'rounds_map': rounds_map,
             'countdown': countdown_data,
-            'is_eliminated': False # Relaxed: Let Admin status dictate access
+            'is_eliminated': is_disqualified_state,
+            'disqualification_reason': disq_reason
         })
     except Exception as e:
         import traceback
@@ -772,15 +765,13 @@ def get_participant_state():
 def start_level():
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({'error': 'No input data provided'}), 400
+        if not data: return jsonify({'error': 'No input data provided'}), 400
             
         user_id = data.get('user_id')
         contest_id = data.get('contest_id', 1)
         level = data.get('level')
         
-        if not user_id or not level:
-            return jsonify({'error': 'Missing required fields (user_id/level)'}), 400
+        if not user_id or not level: return jsonify({'error': 'Missing fields'}), 400
         
         # 1. Resolve User ID
         uid = user_id
@@ -789,25 +780,52 @@ def start_level():
              if u_res: uid = u_res[0]['user_id']
              else: return jsonify({'error': f'User {user_id} not found'}), 404
         
-        # 2. Upsert Level Stats (Ensure Row Exists)
-        # We use INSERT IGNORE to ensure a row exists
+        # 2. Ensure Row Exists
+        # Use Python UTC time for consistency across systems
+        now_utc = datetime.datetime.utcnow()
+        
         db_manager.execute_update(
-            "INSERT IGNORE INTO participant_level_stats (user_id, contest_id, level, status, start_time) VALUES (%s, %s, %s, 'NOT_STARTED', NOW())",
-            (uid, contest_id, level)
+            "INSERT IGNORE INTO participant_level_stats (user_id, contest_id, level, status, start_time) VALUES (%s, %s, %s, 'NOT_STARTED', %s)",
+            (uid, contest_id, level, now_utc)
         )
         
-        # 3. Update Status to IN_PROGRESS
-        # Only update if it's not already completed to avoid resetting completed levels
+        # 3. Start Level (Update Status & Time ONLY if new)
         db_manager.execute_update(
-            "UPDATE participant_level_stats SET start_time = NOW(), status = 'IN_PROGRESS' WHERE user_id=%s AND contest_id=%s AND level=%s AND (status='NOT_STARTED' OR status IS NULL)",
-            (uid, contest_id, level)
+            "UPDATE participant_level_stats SET start_time = %s, status = 'IN_PROGRESS' WHERE user_id=%s AND contest_id=%s AND level=%s AND (status='NOT_STARTED' OR status IS NULL OR status='PAUSED')",
+            (now_utc, uid, contest_id, level)
         )
+        
+        # 4. Fetch Actual Start Time & Duration
+        stats_query = "SELECT start_time FROM participant_level_stats WHERE user_id=%s AND contest_id=%s AND level=%s"
+        stats_res = db_manager.execute_query(stats_query, (uid, contest_id, level))
+        # Ensure UTC suffix
+        start_time = stats_res[0]['start_time'] if stats_res and stats_res[0]['start_time'] else now_utc
+
+        dur_query = "SELECT time_limit_minutes FROM rounds WHERE contest_id=%s AND round_number=%s"
+        dur_res = db_manager.execute_query(dur_query, (contest_id, level))
+        
+        # Requested Defaults
+        def get_default_duration(l):
+            if l <= 3: return 20
+            if l == 4: return 30
+            if l == 5: return 45
+            return 45
+
+        duration = get_default_duration(level)
+        if dur_res and dur_res[0]['time_limit_minutes'] and dur_res[0]['time_limit_minutes'] > 0:
+            duration = dur_res[0]['time_limit_minutes']
         
         from extensions import socketio
         socketio.emit('admin:stats_update', {'contest_id': contest_id})
         socketio.emit('participant:level_start', {'user_id': uid, 'level': level, 'contest_id': contest_id})
         
-        return jsonify({'success': True, 'level': level, 'status': 'IN_PROGRESS'})
+        return jsonify({
+            'success': True, 
+            'level': level, 
+            'status': 'IN_PROGRESS',
+            'start_time': start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            'level_duration_minutes': duration
+        })
         
     except Exception as e:
         traceback.print_exc()
@@ -910,13 +928,41 @@ def notify_progression(contest_id):
 @bp.route('/<contest_id>/advance-level', methods=['POST'])
 @admin_required
 def advance_level(contest_id):
-    # This might be "Start Next Level"
+    # Logic: Find *next* pending/locked round and Activate it
     data = request.get_json()
-    wait_time = data.get('wait_time', 0)
+    wait_time = int(data.get('wait_time', 0))
     
-    # Emit event to start logic
+    result = advance_level_logic(contest_id, wait_time)
+    
+    if not result:
+         return jsonify({'success': False, 'message': 'No pending rounds found.'})
+    
+    # Emit Event
     from extensions import socketio
-    socketio.emit('contest:level_start', {'contest_id': contest_id, 'wait_time': wait_time})
+    socketio.emit('level:activated', {'level': result['level'], 'start_time': result['start_time'].isoformat()})
+    socketio.emit('contest:updated', {'contest_id': contest_id})
+    
+    return jsonify({'success': True, 'message': f"Level {result['level']} Activated (Wait: {wait_time}m)"})
+
+
+@bp.route('/<contest_id>/level/<int:level>/activate', methods=['POST'])
+@admin_required
+def activate_specific_level(contest_id, level):
+    result = activate_level_logic(contest_id, level)
+    
+    from extensions import socketio
+    socketio.emit('level:activated', {'level': level, 'start_time': result['start_time'].isoformat()})
+    socketio.emit('contest:updated', {'contest_id': contest_id})
+    return jsonify({'success': True})
+
+@bp.route('/<contest_id>/level/<int:level>/complete', methods=['POST'])
+@admin_required
+def complete_specific_level(contest_id, level):
+    complete_level_logic(contest_id, level)
+    
+    from extensions import socketio
+    socketio.emit('level:completed', {'level': level})
+    socketio.emit('contest:updated', {'contest_id': contest_id})
     return jsonify({'success': True})
 
 @bp.route('/<contest_id>/countdown', methods=['GET', 'POST'])
@@ -965,8 +1011,25 @@ def toggle_countdown(contest_id):
 @bp.route('/<contest_id>/finalize-round', methods=['POST'])
 @admin_required
 def finalize_round(contest_id):
-    # Mark round as finalized (logic if needed)
-    return jsonify({'success': True})
+    # Mark CURRENT active round as completed
+    # 1. Find active round
+    q = "SELECT round_number FROM rounds WHERE contest_id=%s AND status='active' LIMIT 1"
+    res = db_manager.execute_query(q, (contest_id,))
+    
+    if res:
+        r_num = res[0]['round_number']
+        # 2. Update to completed
+        u_q = "UPDATE rounds SET status='completed' WHERE contest_id=%s AND round_number=%s"
+        db_manager.execute_update(u_q, (contest_id, r_num))
+        
+        # 3. Notify
+        from extensions import socketio
+        socketio.emit('level:completed', {'level': r_num})
+        socketio.emit('contest:updated', {'contest_id': contest_id})
+        
+        return jsonify({'success': True, 'message': f'Level {r_num} Finalized'})
+    
+    return jsonify({'success': False, 'message': 'No active round to finalize'})
 
 @bp.route('/<contest_id>/rounds', methods=['GET'])
 @admin_required
@@ -1013,3 +1076,5 @@ def get_contest_stats(contest_id):
         'average_score': 0,
         'countdown_state': countdown_state
     })
+
+
