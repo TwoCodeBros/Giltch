@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS contests (
   status TEXT DEFAULT 'draft',
   is_active BOOLEAN DEFAULT 1,
   max_violations_allowed INTEGER DEFAULT 5,
+  current_round INTEGER DEFAULT 1,
   created_by INTEGER,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS rounds (
   status TEXT DEFAULT 'pending',
   is_locked BOOLEAN DEFAULT 1,
   unlock_condition TEXT,
+  allowed_language TEXT DEFAULT 'python',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(contest_id, round_number)
 );

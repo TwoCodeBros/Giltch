@@ -56,8 +56,35 @@ def participant_login():
         
         # --- PROCTORING INIT ---
         try:
-            c_res = db_manager.execute_query("SELECT contest_id FROM contests WHERE status='live' LIMIT 1")
+            # Strict Qualification Check
+            # 1. Get Global Active Level
+            c_query = "SELECT contest_id FROM contests WHERE status='live' LIMIT 1"
+            c_res = db_manager.execute_query(c_query)
             active_contest_id = c_res[0]['contest_id'] if c_res else 1
+            
+            gl_query = "SELECT round_number FROM rounds WHERE contest_id=%s AND status='active' ORDER BY round_number ASC LIMIT 1"
+            gl_res = db_manager.execute_query(gl_query, (active_contest_id,))
+            global_active_level = gl_res[0]['round_number'] if gl_res else 1
+            
+            # 2. If Global Level > 1, User MUST be in shortlisted_participants with is_allowed=1
+            if global_active_level > 1:
+                # First, check if they are already playing a previous level?
+                # User Requirement: "Unselected participants are fully blocked ... Even if they know a valid Participant ID."
+                # We block entry if they are NOT allowed for the ACTIVE level.
+                
+                # Check shortlist
+                sl_query = "SELECT is_allowed FROM shortlisted_participants WHERE contest_id=%s AND level=%s AND user_id=%s AND is_allowed=1"
+                sl_res = db_manager.execute_query(sl_query, (active_contest_id, global_active_level, user['user_id']))
+                
+                if not sl_res:
+                    # Not shortlisted for the active level.
+                    # Edge Case: Are they lagging behind? e.g. Active=3, User just finished 1 and needs to do 2?
+                    # "Problem: ... access where unqualified participants can see active levels ..."
+                    # If they are NOT selected for Level 3, but Level 3 is active, they shouldn't enter.
+                    # Unless they have specific permission (custom 'held' status check handles partials, but here we need strict).
+                    
+                    return jsonify({'error': f'You have not been selected for Level {global_active_level}. Access Denied.'}), 403
+
             
             proc_check = db_manager.execute_query("SELECT * FROM participant_proctoring WHERE participant_id=%s AND contest_id=%s", (user['username'], active_contest_id))
             if not proc_check:

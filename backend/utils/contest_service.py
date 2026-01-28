@@ -20,8 +20,8 @@ def create_question_logic(contest_id, round_number, data):
     
     q_query = """
         INSERT INTO questions 
-        (round_id, question_number, question_title, question_description, expected_output, buggy_code, difficulty_level, points, test_cases)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        (round_id, question_number, question_title, question_description, expected_output, buggy_code, difficulty_level, points, test_cases, test_input)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     
     points = data.get('points', 20)
@@ -55,7 +55,8 @@ def create_question_logic(contest_id, round_number, data):
         boilerplate, 
         difficulty, 
         points, 
-        test_cases
+        test_cases,
+        data.get('test_input') or data.get('input')
     ))
     
     if not res:

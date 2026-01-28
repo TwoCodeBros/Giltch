@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS `contests` (
   `status` ENUM('draft', 'live', 'paused', 'ended') DEFAULT 'draft',
   `is_active` BOOLEAN DEFAULT TRUE,
   `max_violations_allowed` INT(11) DEFAULT 5,
+  `current_round` INT(11) DEFAULT 1,
   
   `created_by` INT(11) DEFAULT NULL,
   `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -80,6 +81,8 @@ CREATE TABLE IF NOT EXISTS `rounds` (
   `status` ENUM('pending', 'active', 'completed') DEFAULT 'pending',
   `is_locked` BOOLEAN DEFAULT TRUE,
   `unlock_condition` TEXT DEFAULT NULL,
+  
+  `allowed_language` VARCHAR(50) DEFAULT 'python', -- Added for Language Restriction
   
   `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
   

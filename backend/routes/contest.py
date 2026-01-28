@@ -108,13 +108,14 @@ def manage_countdown(contest_id):
         if action == 'start':
             # Calculate end time
             end_time = datetime.datetime.utcnow() + datetime.timedelta(minutes=int(duration))
-            val = json.dumps({'active': True, 'end_time': end_time.isoformat(), 'duration': duration})
+            target_level = data.get('target_level')
+            val = json.dumps({'active': True, 'end_time': end_time.isoformat(), 'duration': duration, 'target_level': target_level})
             
             db_manager.execute_update(
                 "INSERT INTO admin_state (key_name, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s",
                 (key_name, val, val)
             )
-            socketio.emit('contest:countdown', {'contest_id': contest_id, 'active': True, 'end_time': end_time.isoformat(), 'duration': duration})
+            socketio.emit('contest:countdown', {'contest_id': contest_id, 'active': True, 'end_time': end_time.isoformat(), 'duration': duration, 'target_level': target_level})
             
         elif action == 'stop':
             val = json.dumps({'active': False})
@@ -257,7 +258,8 @@ def update_round(contest_id, round_number):
     return jsonify({'success': True})
 
 
-from utils.logic import execute_code_internal, create_question_logic
+from utils.logic import execute_code_internal
+from utils.contest_service import create_question_logic
 
 # ... (Imports)
 
@@ -356,7 +358,7 @@ def run_code():
     # 1. Fetch Question & Config
     # Join with rounds to get allowed_language STRICTLY
     query = """
-        SELECT q.expected_output, q.test_cases, r.allowed_language
+        SELECT q.test_input, q.expected_output, q.test_cases, r.allowed_language
         FROM questions q
         LEFT JOIN rounds r ON q.round_id = r.round_id
         WHERE q.question_id = %s
@@ -496,7 +498,7 @@ def submit_question():
 
     # 2. Fetch Question & Inputs (and Language)
     query = """
-        SELECT q.expected_output, q.test_cases, q.time_limit_minutes, r.allowed_language
+        SELECT q.test_input, q.expected_output, q.test_cases, q.time_limit_minutes, q.points, r.allowed_language
         FROM questions q
         JOIN rounds r ON q.round_id = r.round_id
         WHERE q.question_id = %s
@@ -562,7 +564,8 @@ def submit_question():
 
     status = 'evaluated'
     is_correct = 1 if all_passed else 0
-    score = 10.0 if all_passed else 0.0
+    score_val = float(question.get('points') or 10.0)
+    score = score_val if all_passed else 0.0
 
     # 4. Save Submission
     save_query = """
@@ -685,6 +688,35 @@ def get_participant_state():
             current_state['level'] = global_active_level
             # Reset status for this view to avoid confusion
             current_state['status'] = 'NOT_STARTED' # Force them to 'enter' again if needed
+        
+        # QUALIFICATION CHECK:
+        # If the global active level is > 1, we must verify if the user is in the 'shortlisted_participants' for this level.
+        # This handles the case where a user completed Level X but was not selected for Level X+1.
+        if global_active_level > 1:
+            # Check if user is allowed for this level
+            q_check = "SELECT is_allowed FROM shortlisted_participants WHERE contest_id=%s AND level=%s AND user_id=%s AND is_allowed=1"
+            q_res = db_manager.execute_query(q_check, (contest_id, global_active_level, uid))
+            
+            if not q_res:
+                # User is NOT Shortlisted for this Active Level.
+                # However, we must be careful:
+                # If they are currently playing Level < Global Level, that's fine (maybe they are lagging behind?) 
+                # BUT the user request implies strict "if not select for next level block that id".
+                # Usually, if Level 3 is Active, everyone who passed Level 2 should have been shortlisted OR eliminated.
+                
+                # Check if they have completed the PREVIOUS level
+                prev_completed = False
+                if current_state:
+                     # If they are seemingly on the previous level completed?
+                     if current_state['level'] == global_active_level - 1 and current_state['status'] == 'COMPLETED':
+                         prev_completed = True
+                     # Or if they are on global level but not started yet?
+                     elif current_state['level'] == global_active_level:
+                         prev_completed = True # They reached it somehow?
+                
+                # If they are "at the door" of the global active level but not allowed:
+                is_disqualified_state = True
+                disq_reason = f"Not selected for Level {global_active_level}"
 
         # RESTORE: Needed for JSON response
         global_level_data = {'round_number': global_active_level, 'status': 'active'}
@@ -857,14 +889,22 @@ def submit_level():
     socketio.emit('admin:stats_update', {'contest_id': contest_id})
     socketio.emit('participant:level_complete', {'user_id': uid, 'level': level, 'contest_id': contest_id})
     
-    # 2. DO NOT Unlock Next Level automatically (Wait for Admin Shortlist)
-    # The next level row will be created by 'get_participant_state' once the user is Shortlisted.
+    # 2. Automatically Unlock Next Level
+    next_level = int(level) + 1
+    
+    # Check if next level exists in Rounds
+    r_check = db_manager.execute_query("SELECT round_id FROM rounds WHERE contest_id=%s AND round_number=%s", (contest_id, next_level))
+    if r_check:
+        db_manager.execute_update(
+            "INSERT IGNORE INTO participant_level_stats (user_id, contest_id, level, status) VALUES (%s, %s, %s, 'NOT_STARTED')",
+            (uid, contest_id, next_level)
+        )
     
     return jsonify({
         "success": True,
-        "message": "Level finalized. Waiting for approval.",
-        "next_level": int(level) + 1,
-        "locked": True
+        "message": "Level finalized.",
+        "next_level": next_level,
+        "locked": False
     })
 
 @bp.route('/heartbeat', methods=['POST'])
@@ -965,48 +1005,7 @@ def complete_specific_level(contest_id, level):
     socketio.emit('contest:updated', {'contest_id': contest_id})
     return jsonify({'success': True})
 
-@bp.route('/<contest_id>/countdown', methods=['GET', 'POST'])
-@admin_required
-def toggle_countdown(contest_id):
-    k = f"contest_{contest_id}_countdown"
-    
-    # Handle GET (Status Check)
-    if request.method == 'GET':
-        res = db_manager.execute_query("SELECT value FROM admin_state WHERE key_name=%s", (k,))
-        if res:
-            try: return jsonify(json.loads(res[0]['value']))
-            except: pass
-        return jsonify({'active': False})
 
-    # Handle POST (Toggle)
-    data = request.get_json()
-    action = data.get('action', 'start')
-    duration_mins = int(data.get('duration', 15))
-
-    new_state = {}
-    if action == 'start':
-        end_time = datetime.datetime.utcnow() + datetime.timedelta(minutes=duration_mins)
-        new_state = {
-            'active': True,
-            'start_time': datetime.datetime.utcnow().isoformat(),
-            'end_time': end_time.isoformat(),
-            'duration': duration_mins
-        }
-    else:
-        new_state = {'active': False}
-    
-    val_str = json.dumps(new_state)
-    
-    # Update DB
-    db_manager.execute_update(
-        "INSERT INTO admin_state (key_name, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s", 
-        (k, val_str, val_str)
-    )
-    
-    from extensions import socketio
-    socketio.emit('contest:countdown', {'contest_id': contest_id, 'state': new_state})
-    
-    return jsonify({'success': True, 'state': new_state})
 
 @bp.route('/<contest_id>/finalize-round', methods=['POST'])
 @admin_required
