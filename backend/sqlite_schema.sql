@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS questions (
   question_description TEXT NOT NULL,
   buggy_code TEXT NOT NULL,
   expected_output TEXT,
+  test_input TEXT,
   test_cases JSON,
   difficulty_level TEXT NOT NULL,
   points INTEGER DEFAULT 10,

@@ -782,7 +782,13 @@ const Admin = {
             const sel = document.getElementById('wait-time-selector');
             const duration = sel ? sel.value : 15;
 
-            const toggleRes = await API.request(`/contest/${this.activeContestId}/countdown`, 'POST', { action, duration });
+            let targetLevel = null;
+            const levelSel = document.getElementById('selection-level-select');
+            if (levelSel) {
+                targetLevel = levelSel.value;
+            }
+
+            const toggleRes = await API.request(`/contest/${this.activeContestId}/countdown`, 'POST', { action, duration, target_level: targetLevel });
 
             if (toggleRes.success) {
                 this.loadDashboard(); // Refresh UI fully
@@ -1005,7 +1011,34 @@ const Admin = {
 
                         <div style="background: #ecfdf5; padding: 1.5rem; border-radius: var(--radius-xl); border: 1px solid #d1fae5;">
                             <h4 style="color: #047857; margin-bottom: 0.5rem;"><i class="fa-solid fa-user-check"></i> 2. Selection</h4>
-                            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1.25rem;">Rank participants and select who qualifies for the next level.</p>
+                            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">Rank participants and select who qualifies for the next level.</p>
+                            
+                            <!-- Level Selector -->
+                            <div style="margin-bottom: 1rem;">
+                                <select id="selection-level-select" class="input" style="width: 100%; border-color: #10b981; font-weight: 600; color: #047857;">
+                                    ${(() => {
+                    const rounds = this.currentRounds || [];
+                    // Find highest completed level
+                    let maxCompleted = 0;
+                    rounds.forEach(r => {
+                        if (r.status === 'completed') maxCompleted = Math.max(maxCompleted, r.round_number);
+                    });
+                    const defaultTarget = maxCompleted + 1;
+
+                    return [1, 2, 3, 4, 5].map(lv => {
+                        const round = rounds.find(r => r.round_number == lv);
+                        const isDone = round && round.status === 'completed';
+                        // Disable if completed (cannot re-select)
+                        // Default to next available level
+                        const selected = lv === defaultTarget ? 'selected' : '';
+                        const disabled = isDone ? 'disabled' : '';
+                        const label = isDone ? `Level ${lv} (Completed)` : `Qualifiers for Level ${lv}`;
+                        return `<option value="${lv}" ${selected} ${disabled}>${label}</option>`;
+                    }).join('');
+                })()}
+                                </select>
+                            </div>
+
                             <div style="display:flex; gap: 0.75rem;">
                                 <button class="btn btn-secondary" onclick="Admin.showSelectionModal()" style="flex:1; border-color: #047857; color: #047857;">Select Top</button>
                                 <button class="btn btn-primary" onclick="Admin.sendProgressionNotifications()" style="flex:1; background: #047857; border: none;">Notify All</button>
@@ -1023,6 +1056,7 @@ const Admin = {
                             ${countdown.active ? `
                                 <div style="margin-top:0.5rem; text-align:center; font-weight:bold; color: #d97706;">
                                     Ends at: ${new Date(countdown.end_time).toLocaleTimeString()}
+                                    ${countdown.target_level ? `<br><small>Target: Level ${countdown.target_level}</small>` : ''}
                                 </div>
                             ` : ''}
                         </div>
@@ -1639,7 +1673,7 @@ const Admin = {
         // We use the level-specific endpoint now to ensure valid linking
         // Endpoint: /contest/<id>/rounds/<level>/question
         try {
-            await API.request(`/contest/${this.activeContestId}/rounds/${level}/question`, 'POST', {
+            const res = await API.request(`/contest/${this.activeContestId}/rounds/${level}/question`, 'POST', {
                 title,
                 difficulty: 'medium', // Default for DB enum compatibility
                 language,
@@ -1647,9 +1681,15 @@ const Admin = {
                 expected_output: expOutput,
                 boilerplate: { [language]: buggyCode }
             });
-            document.getElementById('add-q-modal').style.display = 'none';
-            this.loadQuestionsView();
-            this.showNotification("Question Added Successfully", "success");
+
+            if (res && res.success) {
+                document.getElementById('add-q-modal').style.display = 'none';
+                this.loadQuestionsView();
+                this.showNotification("Question Added Successfully", "success");
+            } else {
+                throw new Error(res && res.error ? res.error : "Unknown backend error");
+            }
+
         } catch (e) {
             alert("Failed: " + e.message);
         }
@@ -2811,21 +2851,21 @@ if (localStorage.getItem('admin_token')) {
     Admin.init();
 }
 
-Admin.activateLevel = async function(level) {
-    if(!confirm('Activate Level ' + level + '?')) return;
+Admin.activateLevel = async function (level) {
+    if (!confirm('Activate Level ' + level + '?')) return;
     try {
         await API.request('/contest/' + this.activeContestId + '/level/' + level + '/activate', 'POST');
         this.showNotification('Level ' + level + ' Activated', 'success');
         this.loadDashboard();
-    } catch(e) { alert('Failed: ' + e.message); }
+    } catch (e) { alert('Failed: ' + e.message); }
 };
 
-Admin.completeLevel = async function(level) {
-    if(!confirm('Complete Level ' + level + '?')) return;
+Admin.completeLevel = async function (level) {
+    if (!confirm('Complete Level ' + level + '?')) return;
     try {
         await API.request('/contest/' + this.activeContestId + '/level/' + level + '/complete', 'POST');
         this.showNotification('Level ' + level + ' Completed', 'success');
         this.loadDashboard();
-    } catch(e) { alert('Failed: ' + e.message); }
+    } catch (e) { alert('Failed: ' + e.message); }
 };
 

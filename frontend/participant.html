@@ -75,6 +75,28 @@
         </div>
     </div>
 
+    <!-- Countdown Overlay -->
+    <div id="countdown-overlay" class="proctor-overlay"
+        style="display: none; background: #0f172a; z-index: 20000; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
+
+        <div style="margin-bottom: 2rem;">
+            <i class="fa-solid fa-hourglass-half"
+                style="font-size: 4rem; color: #f59e0b; animation: pulse 2s infinite;"></i>
+        </div>
+
+        <h1 style="font-size: 3rem; font-weight: 800; color: white; margin-bottom: 1rem;">NEXT LEVEL LOADING</h1>
+        <p style="color: #94a3b8; font-size: 1.2rem; max-width: 600px; margin-bottom: 3rem;">
+            Qualifying participants are being selected. The next level will begin shortly.
+        </p>
+
+        <div class="timer-display"
+            style="font-family: 'Fira Code', monospace; font-size: 5rem; font-weight: 700; color: #f59e0b; background: rgba(255,255,255,0.05); padding: 1rem 3rem; border-radius: 1rem; border: 2px solid #f59e0b;">
+            00:00
+        </div>
+
+        <div id="countdown-target-msg" style="margin-top: 2rem; color: #64748b; font-weight: 600;"></div>
+    </div>
+
     <style>
         .blurred-bg {
             filter: blur(15px);
@@ -452,6 +474,10 @@
                                 this.logout();
                             }
                         }
+                        // Handle Countdown
+                        if (res.countdown) {
+                            this.handleCountdown(res.countdown);
+                        }
                         this.renderLevelSelection();
                     }
                 } catch (e) { console.error("Fetch State Error", e); }
@@ -676,7 +702,8 @@
 
                     // Strict Language Enforcement
                     this.allowedLanguage = (data.allowed_language || 'python').toLowerCase();
-                    document.getElementById('lang-display').innerText = this.allowedLanguage === 'c' ? 'C (GCC)' : (this.allowedLanguage === 'cpp' ? 'C++' : 'Python 3');
+                    const langMap = { 'c': 'C (GCC)', 'cpp': 'C++', 'python': 'Python 3', 'java': 'Java', 'javascript': 'JavaScript' };
+                    document.getElementById('lang-display').innerText = langMap[this.allowedLanguage] || 'Python 3';
 
                     // Set Editor Mode strictly
                     if (window.CodeEditor) {
@@ -734,20 +761,93 @@
                      `;
                 }
 
-                // Set boilerplate - Do NOT reset if user has edited? 
-                // Currently we overwrite. In a real contest we might want to save draft.
-                // For now, always load buggy code or boilerplate.
+                // Set boilerplate
                 CodeEditor.editor.setValue(q.buggy_code || q.boilerplate?.python || "", -1);
+
+                // Update Submit Button State
+                const btn = document.getElementById('btn-submit');
+                if (btn) {
+                    // Disable by default until run passes
+                    btn.classList.add('btn-disabled');
+                    btn.disabled = true;
+
+                    // Check if Last Question
+                    if (idx === this.questions.length - 1) {
+                        btn.innerHTML = '<i class="fa-solid fa-flag-checkered" style="margin-right: 6px;"></i> Master Submit';
+                        btn.style.background = 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)';
+                        btn.dataset.action = 'master';
+                    } else {
+                        btn.innerHTML = '<i class="fa-solid fa-cloud-upload" style="margin-right: 6px;"></i> Submit';
+                        btn.style.background = ''; // Reset
+                        btn.dataset.action = 'normal';
+                    }
+                }
+
+                // Clear Output
+                document.getElementById('console-output').innerHTML = "Ready to execute...";
             },
 
-            renderTestResults(results, isSubmit = false) {
+            async handleToolbarSubmit() {
+                const btn = document.getElementById('btn-submit');
+                if (btn.disabled) {
+                    Toast.show("Please Run and Pass the code first.", "warning");
+                    return;
+                }
+
+                const action = btn.dataset.action;
+                const q = this.questions[this.currentQId];
+                if (!q) return;
+                const isSolved = this.solvedQuestions.has(String(q.id));
+
+                if (action === 'master') {
+                    // Master Submit Flow: Submit current if needed, then finalize
+                    if (!isSolved) {
+                        try {
+                            const success = await this.performSubmit(true, true);
+                            if (success) {
+                                setTimeout(() => {
+                                    Modal.show(
+                                        "Level Completed!",
+                                        "Solution Correct. Ready to finalize level?",
+                                        () => this.submitLevel(),
+                                        "confirm"
+                                    );
+                                }, 800);
+                            }
+                        } catch (e) { console.error(e); }
+                    } else {
+                        Modal.show(
+                            "Confirm Master Submit",
+                            "This will finalize your level attempt and lock further edits. Are you sure?",
+                            () => this.submitLevel(),
+                            "confirm"
+                        );
+                    }
+                } else {
+                    Modal.show(
+                        "Confirm Submission",
+                        "Are you sure you want to submit? This will be graded.", () => {
+                            this.performSubmit();
+                        }
+                    );
+                }
+            },
+
+            renderTestResults(results, isSubmit = false, warnings = null) {
                 const outDiv = document.getElementById('console-output');
                 if (!results || !results.length) {
                     outDiv.innerHTML = "No results returned.";
                     return;
                 }
                 let html = isSubmit ? '<h4 class="submit-res">Submission Results</h4>' : '<h4 class="run-res">Run Results</h4>';
+
+                if (warnings) {
+                    html += `<div style="background:#fffbeb; color:#b45309; padding:0.75rem; margin-bottom:1rem; border-radius:0.5rem; border:1px solid #fcd34d; font-family:'Fira Code', monospace; white-space:pre-wrap; font-size:0.9rem;"><i class="fa-solid fa-triangle-exclamation"></i> <strong>Compilation Warnings:</strong>\n${warnings}</div>`;
+                }
+                let allPassed = true;
+
                 results.forEach((r, i) => {
+                    if (!r.passed) allPassed = false;
                     html += `
                         <div class="test-case-item ${r.passed ? 'passed' : 'failed'}">
                             <div class="tc-head" style="display:flex; justify-content:space-between; align-items:center;">
@@ -758,7 +858,9 @@
                                 <div style="display:grid; grid-template-columns:1fr; gap:0.5rem;">
                                     <div>
                                         <strong>Input:</strong>
-                                        <div style="background:#f1f5f9; padding:4px 8px; border-radius:4px; margin-top:2px; color: #64748b;">(Hidden)</div>
+                                        <div style="background:#f1f5f9; padding:4px 8px; border-radius:4px; margin-top:2px; color: #64748b;">
+                                            ${!isSubmit ? `<pre style="margin:0;">${r.input}</pre>` : '(Hidden)'}
+                                        </div>
                                     </div>
                                     <div>
                                         <strong>Output:</strong>
@@ -778,6 +880,16 @@
                         </div>`;
                 });
                 outDiv.innerHTML = html;
+
+                // Unlock Submission if All Passed
+                if (allPassed && !isSubmit) {
+                    const btn = document.getElementById('btn-submit');
+                    if (btn) {
+                        btn.classList.remove('btn-disabled');
+                        btn.disabled = false;
+                        Toast.show("All Cases Passed! Submission Enabled.", "success");
+                    }
+                }
             },
 
             async runCode() {
@@ -787,6 +899,10 @@
 
                 const outDiv = document.getElementById('console-output');
                 outDiv.innerHTML = '<div class="running">Running test cases...</div>';
+
+                // Disable submit while running
+                const btn = document.getElementById('btn-submit');
+                if (btn) { btn.disabled = true; btn.classList.add('btn-disabled'); }
 
                 try {
                     // Send request - backend handles input injection
@@ -806,13 +922,43 @@
             },
 
             async handleToolbarSubmit() {
-                // Replaced confirm() with Modal
-                Modal.show(
-                    "Confirm Submission",
-                    "Are you sure you want to submit? This will be graded.", () => {
-                        this.performSubmit();
+                const q = this.questions[this.currentQId];
+                if (!q) return;
+
+                const isLastQuestion = (this.currentQId === this.questions.length - 1);
+                const isSolved = this.solvedQuestions.has(String(q.id));
+
+                if (isLastQuestion) {
+                    if (isSolved) {
+                        // Already solved, user clicking Master Submit to finish level
+                        Modal.show("Confirm Master Submit", "Are you sure you want to finalize the level? You cannot change answers after this.", () => {
+                            this.submitLevel();
+                        });
+                    } else {
+                        // Not solved yet. User probably thinks they are submitting the question.
+                        // We try to submit. If correct, we prompt for Level Finalization.
+                        Modal.show("Confirm Submission", "Submit solution for the final question?", async () => {
+                            const success = await this.performSubmit(true, true); // return result, suppress modal
+                            if (success) {
+                                // If passed, immediately ask to finalize level
+                                setTimeout(() => {
+                                    Modal.show("Level Completed!", "Solution Correct! Ready to finalize the level?", () => {
+                                        this.submitLevel();
+                                    });
+                                }, 500);
+                            }
+                        });
                     }
-                );
+                } else {
+                    // Normal Question
+                    if (isSolved) {
+                        Toast.show("Question already solved.", "info");
+                        return;
+                    }
+                    Modal.show("Confirm Submission", "Are you sure you want to submit? This will be graded.", () => {
+                        this.performSubmit();
+                    });
+                }
             },
 
             async performSubmit() {
@@ -855,6 +1001,55 @@
                 socket.on('level:paused', () => this.fetchAndApplyState());
                 socket.on('level:completed', () => this.fetchAndApplyState());
                 socket.on('contest:updated', () => this.fetchAndApplyState());
+                socket.on('contest:countdown', (data) => this.handleCountdown(data));
+            },
+
+            countdownInterval: null,
+
+            handleCountdown(state) {
+                // state = { active: bool, end_time: ISO, target_level: int, etc }
+                const overlay = document.getElementById('countdown-overlay');
+                if (!state || !state.active) {
+                    if (overlay) overlay.style.display = 'none';
+                    if (this.countdownInterval) clearInterval(this.countdownInterval);
+                    return;
+                }
+
+                if (overlay) overlay.style.display = 'flex';
+
+                // Show Target Level Info
+                const msg = document.getElementById('countdown-target-msg');
+                if (msg && state.target_level) {
+                    msg.innerText = `Preparing Level ${state.target_level}...`;
+                }
+
+                // Timer Logic
+                const timerDisplay = overlay.querySelector('.timer-display');
+                if (this.countdownInterval) clearInterval(this.countdownInterval);
+
+                const update = () => {
+                    const now = new Date().getTime();
+                    // Basic ISO parsing (works in modern browsers)
+                    let endStr = state.end_time;
+                    if (endStr && !endStr.endsWith('Z')) endStr += 'Z';
+                    const end = new Date(endStr).getTime();
+                    const diff = end - now;
+
+                    if (diff <= 0) {
+                        timerDisplay.innerText = "00:00";
+                        clearInterval(this.countdownInterval);
+                        // Maybe trigger a reload?
+                        setTimeout(() => this.fetchAndApplyState(), 2000);
+                        return;
+                    }
+
+                    const m = Math.floor(diff / 60000);
+                    const s = Math.floor((diff % 60000) / 1000);
+                    timerDisplay.innerText = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                };
+
+                update();
+                this.countdownInterval = setInterval(update, 1000);
             },
 
             enforceFullscreen() {
@@ -924,7 +1119,7 @@
                     });
 
                     if (res && res.test_results) {
-                        this.renderTestResults(res.test_results);
+                        this.renderTestResults(res.test_results, false, res.warnings);
                         const execTime = document.getElementById('exec-time');
                         if (execTime) execTime.innerText = res.execution_time || "Done";
                     } else {
@@ -935,16 +1130,18 @@
                 } catch (e) { outDiv.innerHTML = `<div class="error-msg">Connection Error: ${e.message}</div>`; }
             },
 
-            async performSubmit() {
-                if (this.isThrottled) return;
+            async performSubmit(returnResult = false, suppressSuccessModal = false) {
                 const q = this.questions[this.currentQId];
-                if (!q) return;
+                if (!q) return false;
 
                 const code = CodeEditor.editor.getValue();
-
-                // Manual throttle for Submit without visual countdown (just disable)
                 const btn = document.getElementById('btn-submit');
-                if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Submitting...'; }
+
+                // UI Loading State
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Submitting...';
+                }
 
                 try {
                     const res = await API.request('/contest/submit-question', 'POST', {
@@ -953,21 +1150,87 @@
                         contest_id: this.activeContestId, level: this.currentLevel
                     });
 
+                    // 1. System Error / Validation Error (400/404/500 from Backend)
+                    if (res.error) {
+                        Toast.show(res.error, "error");
+                        if (returnResult) return false;
+                        return;
+                    }
+
+                    // 2. Verified Result (Success or Incorrect)
                     if (res.success) {
-                        Modal.show("Correct!", "Your solution passed all test cases.", null, 'info');
+                        // PASSED
                         this.solvedQuestions.add(String(q.id));
                         this.renderTabs();
-                        this.fetchAndApplyState();
-                        this.renderTestResults(res.test_results || [], true);
+                        this.fetchAndApplyState(); // Refresh score/progress
+
+                        this.renderTestResults(res.test_results || [], true, res.warnings);
+
+                        if (!suppressSuccessModal) {
+                            Modal.show("Correct!", "Your solution passed all test cases.", null, 'info');
+                        }
+                        return true;
                     } else {
-                        Toast.show("Solution Incorrect", "error");
-                        this.renderTestResults(res.test_results || [], true);
+                        // FAILED Logic Check
+                        // Backend explicitly sent success=False
+                        Toast.show(res.message || "Solution Incorrect", "error");
+                        this.renderTestResults(res.test_results || [], true, res.warnings);
+                        return false;
+                    }
+
+                } catch (e) {
+                    Toast.show("Network/System Error: " + e.message, "error");
+                    return false;
+                } finally {
+                    // Restore Button State
+                    if (btn) {
+                        btn.disabled = false;
+                        if (this.currentQId === this.questions.length - 1) {
+                            btn.innerHTML = '<i class="fa-solid fa-flag-checkered"></i> Master Submit';
+                            btn.dataset.action = 'master';
+                            btn.style.background = 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)';
+                        } else {
+                            btn.innerHTML = '<i class="fa-solid fa-cloud-upload"></i> Submit';
+                            btn.dataset.action = 'normal';
+                            btn.style.background = '';
+                        }
+                    }
+                }
+            },
+
+            async submitLevel() {
+                try {
+                    // Check if all questions are solved?
+                    // Verify locally first
+                    if (this.solvedQuestions.size < this.questions.length) {
+                        // Although prompt says "partial scores must be finalized", usually Master Submit implies "I am done".
+                        // We will allow it but warn? Or just proceed.
+                        // "Master Submit must finalize the level attempt... persist... score"
+                    }
+
+                    const btn = document.getElementById('btn-submit');
+                    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Finalizing...'; }
+
+                    const res = await API.request('/contest/submit-level', 'POST', {
+                        user_id: this.user.participant_id,
+                        contest_id: this.activeContestId,
+                        level: this.currentLevel
+                    });
+
+                    if (res.success) {
+                        Modal.show("Level Completed!", "Your score has been recorded. Returning to level selection.", () => {
+                            this.showView('selection');
+                            this.fetchAndApplyState();
+                        }, 'info');
+                    } else {
+                        Toast.show("Error finalizing level: " + res.message, "error");
+                        if (btn) btn.disabled = false;
                     }
                 } catch (e) {
-                    Toast.show("Submission Error: " + e.message, "error");
-                } finally {
+                    console.error(e);
+                    Toast.show("Network Error during finalization", "error");
                     const btn = document.getElementById('btn-submit');
-                    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-cloud-upload"></i> Submit'; }
+                    if (btn) btn.disabled = false;
                 }
             },
         };

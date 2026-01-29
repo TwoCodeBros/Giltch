@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS `questions` (
   `buggy_code` TEXT NOT NULL,
   
   `expected_output` TEXT DEFAULT NULL,
+  `test_input` TEXT DEFAULT NULL,
   `test_cases` JSON DEFAULT NULL,
   `difficulty_level` ENUM('easy', 'medium', 'hard') NOT NULL,
   

@@ -146,6 +146,7 @@ def run_cpp(code, lang, input_str, timeout):
             )
             if c_proc.returncode != 0:
                  return {'success': False, 'output': '', 'error': "Compilation Error:\n" + c_proc.stderr}
+            warnings = c_proc.stderr # Capture warnings
         except Exception as e:
              return {'success': False, 'output': '', 'error': "Compiler not found or failed."}
 
@@ -159,8 +160,8 @@ def run_cpp(code, lang, input_str, timeout):
                 timeout=timeout
             )
             if r_proc.returncode != 0:
-                return {'success': False, 'output': r_proc.stdout, 'error': r_proc.stderr or "Runtime Error"}
-            return {'success': True, 'output': r_proc.stdout, 'error': None}
+                return {'success': False, 'output': r_proc.stdout, 'error': r_proc.stderr or "Runtime Error", 'warnings': warnings}
+            return {'success': True, 'output': r_proc.stdout, 'error': None, 'warnings': warnings}
         except subprocess.TimeoutExpired:
             return {'success': False, 'output': '', 'error': "Time Limit Exceeded"}
 
@@ -178,7 +179,7 @@ def run_java(code, input_str, timeout):
         # Compile
         try:
             c_proc = subprocess.run(
-                ['javac', src_path],
+                ['javac', '--release', '8', src_path],
                 capture_output=True,
                 text=True,
                 timeout=10

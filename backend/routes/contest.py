@@ -329,7 +329,8 @@ def get_questions():
             'title': q['question_title'],
             'description': q.get('question_description', ''), 
             'expected_output': q.get('expected_output'),
-            'boilerplate': {'python': q['buggy_code']}, # Use buggy_code as boilerplate
+            'buggy_code': q['buggy_code'], # Send directly 
+            'boilerplate': {allowed_lang: q['buggy_code']}, # Use correct lang key
             'test_cases': tcs, 
             'difficulty': q['difficulty_level'],
             # If question has specific override (unlikely in current schema but possible), use it? 
@@ -371,15 +372,11 @@ def run_code():
     if not q_res:
         try:
             if str(question_id).isdigit():
-                print(f"Retrying ID {question_id} as INT...")
                 q_res = db_manager.execute_query(query, (int(question_id),))
             else:
-                print(f"Retrying ID {question_id} as STR...")
                 q_res = db_manager.execute_query(query, (str(question_id),))
         except: pass
         
-    print(f"RUN CODE QUERY RES: {q_res}")
-    
     if not q_res:
         print(f"RUN CODE WARN: Question ID {question_id} NOT FOUND in DB.")
         return jsonify({'error': 'Question not found', 'success': False})
@@ -387,7 +384,6 @@ def run_code():
     question = q_res[0]
 
     # Enforce Allowed Language STRICTLY
-    # If round says 'c', we MUST use 'c'.
     allowed = question.get('allowed_language')
     if allowed:
         language = allowed.lower()
@@ -398,6 +394,8 @@ def run_code():
     if language in ['c', 'gcc']: language = 'c'
     if language in ['cpp', 'g++']: language = 'cpp'
     if language in ['py', 'python3']: language = 'python'
+    if language in ['java', 'jdk']: language = 'java'
+    if language in ['javascript', 'js', 'node']: language = 'javascript'
     
     # 2. Determine input/expected (Inputs)
     inputs = []
@@ -413,7 +411,9 @@ def run_code():
         except: pass
         
     if not inputs:
-        inputs = [{'input': '', 'expected': ''}] # Fallback to empty input
+        # Fallback for RUN only - warn user
+        inputs = [{'input': '', 'expected': ''}] 
+        print(f"WARN: No inputs found for QID {question_id}, running with empty input.")
 
     # 2. Track Execution (Run Count)
     if user_id:
@@ -445,11 +445,15 @@ def run_code():
         result = execute_code_internal(code, language, inp)
         duration = time.time() - start_t
         
+        # Normalize for comparison
+        def normalize(s):
+            if not s: return ""
+            return "\n".join([line.strip() for line in s.splitlines() if line.strip()])
+
         passed = False
         if result['success']:
-            output = result['output'].strip()
-            # Loose comparison (trim whitespace)
-            passed = (output == exp.strip())
+            output = result['output'].replace('\r\n', '\n').strip()
+            passed = (normalize(output) == normalize(exp))
         else:
             output = result['error']
             
@@ -459,16 +463,22 @@ def run_code():
             'output': output,
             'expected': exp,
             'error': result.get('error') if not result['success'] else None,
-            'duration': duration
+            'duration': duration,
+            'warnings': result.get('warnings')
         })
 
     # Summary Execution Time
     total_time = sum(r['duration'] for r in test_results)
+    
+    # Collect warnings (unique)
+    warnings = list(set([r['warnings'] for r in test_results if r.get('warnings')]))
+    warnings_str = "\n".join(warnings) if warnings else None
 
     return jsonify({
         'success': True,
         'test_results': test_results,
-        'execution_time': f"{total_time:.3f}s"
+        'execution_time': f"{total_time:.3f}s",
+        'warnings': warnings_str
     })
 
 @bp.route('/submit-question', methods=['POST'])
@@ -477,50 +487,64 @@ def submit_question():
     user_id = data.get('user_id')
     question_id = data.get('question_id')
     code = data.get('code')
-    language = data.get('language', 'python')
     contest_id = data.get('contest_id', 1)
     
-    if not all([user_id, question_id, code]):
-        return jsonify({'error': 'Missing data'}), 400
+    # Validation
+    if not user_id: return jsonify({'error': 'User ID missing'}), 400
+    if not question_id: return jsonify({'error': 'Question ID missing'}), 400
+    if code is None: return jsonify({'error': 'Code missing'}), 400
 
-    # User ID Handling
+    # User ID Resolution
     uid = user_id
     if isinstance(user_id, str) and not user_id.isdigit():
          u_res = db_manager.execute_query("SELECT user_id FROM users WHERE username=%s", (user_id,))
          if u_res: uid = u_res[0]['user_id']
          else: return jsonify({'error': 'User not found'}), 404
 
-    # 1. Check if already passed/submitted
+    # 1. Authoritative Question Lookup (Left Join to be safe)
+    query = """
+        SELECT q.question_id, q.round_id, q.test_input, q.expected_output, q.test_cases, q.points, r.allowed_language
+        FROM questions q
+        LEFT JOIN rounds r ON q.round_id = r.round_id
+        WHERE q.question_id = %s
+    """
+    
+    # Robust ID Handling (Int/Str)
+    q_res = db_manager.execute_query(query, (question_id,))
+    if not q_res:
+        # Try type conversion retry
+        try:
+            if str(question_id).isdigit():
+                q_res = db_manager.execute_query(query, (int(question_id),))
+            else:
+                q_res = db_manager.execute_query(query, (str(question_id),))
+        except: pass
+
+    if not q_res: 
+        return jsonify({'error': f'Question {question_id} not found in database'}), 404
+        
+    question = q_res[0]
+    
+    # 2. Check for Duplicate Submission (Success Only)
     check_query = "SELECT is_correct FROM submissions WHERE user_id=%s AND question_id=%s AND is_correct=1"
-    check_res = db_manager.execute_query(check_query, (uid, question_id))
+    check_res = db_manager.execute_query(check_query, (uid, question['question_id']))
     if check_res:
          return jsonify({'error': 'Already submitted successfully', 'submitted': True}), 400
 
-    # 2. Fetch Question & Inputs (and Language)
-    query = """
-        SELECT q.test_input, q.expected_output, q.test_cases, q.time_limit_minutes, q.points, r.allowed_language
-        FROM questions q
-        JOIN rounds r ON q.round_id = r.round_id
-        WHERE q.question_id = %s
-    """
-    q_res = db_manager.execute_query(query, (question_id,))
-    if not q_res: return jsonify({'error': 'Question not found'}), 404
-    question = q_res[0]
-
-    # Enforce Allowed Language STRICTLY
+    # 3. Language Handling
     allowed = question.get('allowed_language')
     if allowed:
         language = allowed.lower()
     else:
-        language = data.get('language', 'python') # Fallback
+        language = data.get('language', 'python')
 
-    # Normalize Language String
     if language in ['c', 'gcc']: language = 'c'
     if language in ['cpp', 'g++']: language = 'cpp'
     if language in ['py', 'python3']: language = 'python'
     if language in ['java', 'jdk']: language = 'java'
+    if language in ['javascript', 'js', 'node']: language = 'javascript'
 
-    # Prepare Inputs
+    # 4. Input Preparation
     inputs = []
     if question.get('test_input') is not None:
         inputs.append({'input': question['test_input'], 'expected': question['expected_output']})
@@ -529,18 +553,20 @@ def submit_question():
             tcs = json.loads(question['test_cases'])
             inputs = tcs if isinstance(tcs, list) else []
         except: pass
-    if not inputs: inputs = [{'input': '', 'expected': ''}]
+    
+    if not inputs:
+        # Critical Data Error
+        return jsonify({'error': 'System Error: Question has no test cases configured'}), 500
 
-    # 3. Secure Execution (Strict Mode)
-    # Passed only if ALL inputs match
+    # 5. Execution (Strict)
     all_passed = True
     test_results = []
+    start_time = time.time()
     
     for tc in inputs:
         inp = str(tc.get('input', ''))
         exp = str(tc.get('expected', '')).replace('\r\n', '\n').strip()
         
-        # Use execute_code_internal which now supports all languages
         res = execute_code_internal(code, language, inp)
         
         if res['success']:
@@ -548,8 +574,8 @@ def submit_question():
         else:
             actual = ""
         
-        # Normalize for comparison
         def normalize(s):
+            if not s: return ""
             return "\n".join([line.strip() for line in s.splitlines() if line.strip()])
         
         passed = False
@@ -559,31 +585,51 @@ def submit_question():
         if not passed: all_passed = False
         
         test_results.append({
-            'input': inp, 'expected': exp, 'output': actual, 'passed': passed, 'error': res['error'] if not res['success'] else None
+            'input': inp, 'expected': exp, 'output': actual, 'passed': passed, 
+            'error': res['error'] if not res['success'] else None,
+            'warnings': res.get('warnings')
         })
 
+    execution_duration = int(time.time() - start_time)
+
+    # 6. Persistence (Guaranteed Insert)
     status = 'evaluated'
     is_correct = 1 if all_passed else 0
     score_val = float(question.get('points') or 10.0)
     score = score_val if all_passed else 0.0
+    
+    # Collect Warnings
+    warnings = list(set([r['warnings'] for r in test_results if r.get('warnings')]))
+    warnings_str = "\n".join(warnings) if warnings else None
 
-    # 4. Save Submission
     save_query = """
         INSERT INTO submissions 
-        (user_id, contest_id, round_id, question_id, submitted_code, status, is_correct, test_results, score_awarded)
-        VALUES (%s, %s, (SELECT round_id FROM questions WHERE question_id=%s), %s, %s, %s, %s, %s, %s)
+        (user_id, contest_id, round_id, question_id, submitted_code, status, is_correct, test_results, score_awarded, time_taken_seconds)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
-    # Note: round_id subquery added to match schema requirements if strictly enforced, or we can fetch it earlier.
-    # Schema says submissions has round_id NOT NULL.
-    # We didn't fetch round_id in step 2. Let's do a quick lookup or subquery.
     
-    db_manager.execute_update(save_query, (
-        uid, contest_id, question_id, question_id, code, status, is_correct, json.dumps(test_results), score
-    ))
+    # Use Authoritative Question Data
+    final_round_id = question.get('round_id')
+    final_qid = question['question_id']
+    
+    try:
+        insert_res = db_manager.execute_update(save_query, (
+            uid, contest_id, final_round_id, final_qid, code, status, is_correct, json.dumps(test_results), score, execution_duration
+        ))
+        
+        if not insert_res:
+            print(f"SUBMIT DATA LOSS: Insert returned False for UID {uid} QID {final_qid}")
+            # Try to fetch last error from db manager if possible, or just fail hard.
+            return jsonify({'error': 'Database Error: Submission could not be saved. Please retry.'}), 500
+            
+    except Exception as e:
+        print(f"SUBMIT EXCEPTION: {e}")
+        return jsonify({'error': f'Submission Persistence Failed: {str(e)}'}), 500
 
-    # 5. Update Level Stats
+    # 7. Level Stats Update
     if all_passed:
         level = data.get('level', 1)
+        # Update Participant Stats
         recalc_query = """
             UPDATE participant_level_stats ps
             SET 
@@ -594,14 +640,12 @@ def submit_question():
         db_manager.execute_update("INSERT IGNORE INTO participant_level_stats (user_id, contest_id, level) VALUES (%s, %s, %s)", (uid, contest_id, level))
         db_manager.execute_update(recalc_query, (uid, contest_id, level))
 
-        # Real-time Admin Update
+        # Real-time Broadcast
         from extensions import socketio
         socketio.emit('admin:stats_update', {'user_id': uid, 'contest_id': contest_id})
-        
-        # Emit feed event
         socketio.emit('participant:submitted', {
             'participant_id': uid,
-            'name': user_id, # Fallback, ideally fetch name
+            'name': user_id,
             'question': f"Q{question_id}",
             'contest_id': contest_id
         })
@@ -609,8 +653,10 @@ def submit_question():
     return jsonify({
         'success': all_passed,
         'status': status,
-        'message': 'Solution Submitted' if all_passed else 'Solution Failed',
-        'score': score
+        'warnings': warnings_str,
+        'message': 'Solution Submitted' if all_passed else 'Solution Incorrect',
+        'score': score,
+        'execution_time': f"{execution_duration}s"
     })
 
 def execute_code_secure(code, language, input_data):
@@ -880,14 +926,37 @@ def submit_level():
          if u_res: uid = u_res[0]['user_id']
     
     # 1. Update Status to COMPLETED
+    # Set completion time
+    now_utc = datetime.datetime.utcnow()
     db_manager.execute_update(
-        "UPDATE participant_level_stats SET status='COMPLETED' WHERE user_id=%s AND contest_id=%s AND level=%s", 
-        (uid, contest_id, level)
+        "UPDATE participant_level_stats SET status='COMPLETED', completed_at=%s WHERE user_id=%s AND contest_id=%s AND level=%s", 
+        (now_utc, uid, contest_id, level)
     )
     
+    # Fetch Updated Stats for Broadccast
+    stats_q = "SELECT level_score, violation_count, completed_at, start_time FROM participant_level_stats WHERE user_id=%s AND contest_id=%s AND level=%s"
+    stats = db_manager.execute_query(stats_q, (uid, contest_id, level))
+    
+    score = 0
+    violations = 0
+    time_taken = 0
+    if stats:
+        s = stats[0]
+        score = s.get('level_score', 0)
+        violations = s.get('violation_count', 0)
+        if s.get('completed_at') and s.get('start_time'):
+            time_taken = int((s['completed_at'] - s['start_time']).total_seconds())
+
     from extensions import socketio
     socketio.emit('admin:stats_update', {'contest_id': contest_id})
-    socketio.emit('participant:level_complete', {'user_id': uid, 'level': level, 'contest_id': contest_id})
+    socketio.emit('participant:level_complete', {
+        'user_id': uid, 
+        'level': level, 
+        'contest_id': contest_id,
+        'score': float(score),
+        'time_taken': time_taken,
+        'violations': violations
+    })
     
     # 2. Automatically Unlock Next Level
     next_level = int(level) + 1

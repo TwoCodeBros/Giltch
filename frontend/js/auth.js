@@ -30,7 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 enterDashboard(user);
                 Toast.show(`Welcome, ${user.name}!`, 'success');
             } else {
-                Toast.show('Invalid Participant ID. Admin must create it via Admin Panel.', 'error');
+                Toast.show(response.error || 'Invalid Participant ID. Admin must create it via Admin Panel.', 'error');
             }
         });
     }
