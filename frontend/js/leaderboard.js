@@ -7,6 +7,7 @@ const Leaderboard = {
     // Data
     data: [],
     selectedLevel: 1,
+    totalQuestions: 0,
 
     async init() {
         this.setupSearch();
@@ -47,6 +48,7 @@ const Leaderboard = {
         try {
             const data = await API.request(`/leaderboard/?level=${this.selectedLevel}`);
             this.data = data.leaderboard || [];
+            this.totalQuestions = data.total_questions || 0;
             this.render(document.getElementById('search-input').value);
 
             // Update timestamp
@@ -92,7 +94,7 @@ const Leaderboard = {
                     <td class="score-cell">${p.score}</td>
                     <td style="font-family: var(--font-mono);">${p.time}</td>
                     <td>
-                        <span class="badge badge-success">${p.solved || 0}/3</span>
+                        <span class="badge badge-success">${p.solved || 0}/${this.totalQuestions || '-'}</span>
                     </td>
                 </tr>
             `;

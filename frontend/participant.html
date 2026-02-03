@@ -318,7 +318,7 @@
                             onclick="CodeEditor.editor.setFontSize(parseInt(CodeEditor.editor.getFontSize()) - 1)">A-</button>
                     </div>
                     <div class="toolbar-group">
-                        <button class="btn btn-primary" onclick="Contest.runCode()"
+                        <button class="btn btn-primary" onclick="Contest.runCode()" id="btn-run"
                             style="background-color: var(--success); border: none;">
                             <i class="fa-solid fa-play" style="margin-right: 6px;"></i> Run
                         </button>
@@ -354,6 +354,50 @@
             </div>
         </div>
     </div>
+
+    <!-- SELECTION NOTIFICATION OVERLAYS -->
+    <div id="selected-overlay" class="proctor-overlay"
+        style="display: none; background: rgba(16, 185, 129, 0.96); z-index: 30000; flex-direction: column; text-align: center;">
+        <i class="fa-solid fa-trophy"
+            style="font-size: 5rem; color: #fbbf24; margin-bottom: 2rem; animation: float 3s ease-in-out infinite;"></i>
+        <h1 style="font-size: 3rem; font-weight: 800; color: white; margin-bottom: 1rem;">CONGRATULATIONS!</h1>
+        <p style="color: white; font-size: 1.5rem; max-width: 600px; margin-bottom: 2rem;">
+            🎉 You’re selected for the next level!
+            <br><span style="font-size: 1.1rem; opacity: 0.9; display:block; margin-top:1rem; font-weight: 500;">Please
+                wait while we prepare the next round...</span>
+        </p>
+        <div style="color: white; font-size: 2rem;"><i class="fa-solid fa-spinner fa-spin"></i></div>
+    </div>
+
+    <div id="unselected-overlay" class="proctor-overlay"
+        style="display: none; background: rgba(15, 23, 42, 0.98); z-index: 30000; flex-direction: column; text-align: center;">
+        <i class="fa-solid fa-handshake-simple" style="font-size: 5rem; color: #64748b; margin-bottom: 2rem;"></i>
+        <h1 style="font-size: 2.5rem; font-weight: 800; color: white; margin-bottom: 1rem;">Thank You!</h1>
+        <p style="color: #cbd5e1; font-size: 1.25rem; max-width: 600px; margin-bottom: 3rem; line-height: 1.6;">
+            🙏 You have completed your journey in this contest.
+            <br>We appreciate your participation and effort!
+        </p>
+        <button class="btn btn-primary" onclick="window.location.href='index.html'"
+            style="padding: 1rem 3rem; font-size: 1.1rem; background: white; color: #0f172a; border: none; font-weight: 700; border-radius: 50px; box-shadow: 0 10px 25px -5px rgba(255, 255, 255, 0.3);">
+            <i class="fa-solid fa-house" style="margin-right: 8px;"></i> Go to Home
+        </button>
+    </div>
+
+    <style>
+        @keyframes float {
+            0% {
+                transform: translateY(0px);
+            }
+
+            50% {
+                transform: translateY(-20px);
+            }
+
+            100% {
+                transform: translateY(0px);
+            }
+        }
+    </style>
 
     <!-- Scripts -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.7/ace.js"></script>
@@ -452,9 +496,6 @@
                     });
                     if (res && res.success) {
                         if (res.is_eliminated) {
-                            // Replaced alert with Modal (assuming not in fullscreen or overlay above)
-                            // However, disqualified usually means we force logout.
-                            // We use the overlay logic for critical errors, but here we just logout.
                             this.logout();
                             return;
                         }
@@ -470,15 +511,51 @@
                         if (window.Proctoring) {
                             window.Proctoring.violations = res.violations || 0;
                             window.Proctoring.updateBadge();
-                            if (res.violations > 20) { // Safety double check
+                            if (res.violations > 20) {
                                 this.logout();
                             }
                         }
-                        // Handle Countdown
                         if (res.countdown) {
                             this.handleCountdown(res.countdown);
                         }
                         this.renderLevelSelection();
+
+                        // ---------------- NEW NOTIFICATION LOGIC ----------------
+                        const selOverlay = document.getElementById('selected-overlay');
+                        const unselOverlay = document.getElementById('unselected-overlay');
+
+                        // Show overlays only if user is NOT currently inside a level (IN_PROGRESS)
+                        if (this.userStatus !== 'IN_PROGRESS' && res.results_released) {
+                            if (res.is_shortlisted_next) {
+                                unselOverlay.style.display = 'none';
+                                selOverlay.style.display = 'flex';
+
+                                // Check if global level has advanced (Level Started)
+                                if (res.global_level > this.userMaxLevel) {
+                                    // Update overlay to show Enter button if not already showing
+                                    if (!document.getElementById('btn-enter-next')) {
+                                        selOverlay.innerHTML = `
+                                            <i class="fa-solid fa-rocket" style="font-size: 5rem; color: #3b82f6; margin-bottom: 2rem; animation: bounce 1s infinite;"></i>
+                                            <h1 style="font-size: 3rem; font-weight: 800; color: white; margin-bottom: 1rem;">LEVEL ${res.global_level} STARTED!</h1>
+                                            <p style="color:white; font-size:1.2rem; margin-bottom:2rem;">The round is live. Good luck!</p>
+                                            <button id="btn-enter-next" class="btn btn-primary" onclick="Contest.handleLevelClick(${res.global_level}); document.getElementById('selected-overlay').style.display='none';"
+                                                style="padding: 1rem 3rem; font-size: 1.5rem; border-radius: 50px; box-shadow: 0 0 30px rgba(59, 130, 246, 0.5);">
+                                                ENTER NOW
+                                            </button>
+                                        `;
+                                    }
+                                }
+                            } else {
+                                // Not Selected
+                                selOverlay.style.display = 'none';
+                                unselOverlay.style.display = 'flex';
+                            }
+                        } else {
+                            // Hide overlays if logic doesn't apply
+                            if (selOverlay) selOverlay.style.display = 'none';
+                            if (unselOverlay) unselOverlay.style.display = 'none';
+                        }
+                        // --------------------------------------------------------
                     }
                 } catch (e) { console.error("Fetch State Error", e); }
             },
@@ -892,34 +969,7 @@
                 }
             },
 
-            async runCode() {
-                const code = CodeEditor.editor.getValue();
-                const q = this.questions[this.currentQId];
-                if (!q) return;
 
-                const outDiv = document.getElementById('console-output');
-                outDiv.innerHTML = '<div class="running">Running test cases...</div>';
-
-                // Disable submit while running
-                const btn = document.getElementById('btn-submit');
-                if (btn) { btn.disabled = true; btn.classList.add('btn-disabled'); }
-
-                try {
-                    // Send request - backend handles input injection
-                    const res = await API.request('/contest/run', 'POST', {
-                        code: code, language: this.allowedLanguage, // Strict
-                        question_id: q.id, user_id: this.user.participant_id,
-                        contest_id: this.activeContestId, level: this.currentLevel
-                    });
-                    if (res && res.test_results) {
-                        this.renderTestResults(res.test_results);
-                        const execTime = document.getElementById('exec-time');
-                        if (execTime) execTime.innerText = res.execution_time || "Done";
-                    } else {
-                        outDiv.innerHTML = `<div class="error-msg">${res.error || 'Execution Error'}</div>`;
-                    }
-                } catch (e) { outDiv.innerHTML = `<div class="error-msg">Connection Error: ${e.message}</div>`; }
-            },
 
             async handleToolbarSubmit() {
                 const q = this.questions[this.currentQId];

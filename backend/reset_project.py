@@ -70,8 +70,8 @@ def reset_database():
     admin_id = str(uuid.uuid4())
     admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
     db_manager.execute_update(
-        "INSERT INTO users (user_id, username, password_hash, full_name, email, role, status) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-        (admin_id, "admin", admin_pass, "Super Admin", "admin@debugmarathon.com", "admin", "active")
+        "INSERT INTO users (user_id, username, password_hash, full_name, email, role, status, admin_status) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (admin_id, "admin", admin_pass, "Super Admin", "admin@debugmarathon.com", "admin", "active", "APPROVED")
     )
     report.append(f"Admin Created: username='admin', password='admin123'")
 

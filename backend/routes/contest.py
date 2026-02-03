@@ -772,9 +772,10 @@ def get_participant_state():
 
 
         
-        # 1. Fetch TOTAL Violations and Disqualification Status
-        pr_query = "SELECT total_violations, is_disqualified, disqualification_reason FROM participant_proctoring WHERE participant_id=%s AND contest_id=%s"
-        p_res = db_manager.execute_query(pr_query, (user_id if isinstance(user_id, str) and not user_id.isdigit() else (u_res[0]['username'] if u_res else ''), contest_id))
+        # 1. Fetch TOTAL Violations and Disqualification Status using USER_ID (Int)
+        # This matches the source of truth set in proctoring.py
+        pr_query = "SELECT total_violations, is_disqualified, disqualification_reason FROM participant_proctoring WHERE user_id=%s AND contest_id=%s"
+        p_res = db_manager.execute_query(pr_query, (uid, contest_id))
         
         total_violations = 0
         is_disqualified_state = False
@@ -818,6 +819,22 @@ def get_participant_state():
             # If the DB returned a naive object, we just add Z.
             return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        # 6. Check Results Released State
+        # Logic: If I am in Level 1, and Level 1 Results are released, I need to know if I am in Level 2 Shortlist.
+        current_level_num = current_state['level'] if current_state else 1
+        key = f"contest_{contest_id}_level_{current_level_num}_released"
+        rel_res = db_manager.execute_query("SELECT value FROM admin_state WHERE key_name=%s", (key,))
+        results_released = rel_res and rel_res[0]['value'] == 'true'
+        
+        is_shortlisted_next = False
+        if results_released:
+            next_lvl = current_level_num + 1
+            # Check if allowed in next level
+            # shortlisted_participants stores "level" as the level they are allowed INTO.
+            sl_q = "SELECT 1 FROM shortlisted_participants WHERE contest_id=%s AND level=%s AND user_id=%s AND is_allowed=1"
+            sl_chk = db_manager.execute_query(sl_q, (contest_id, next_lvl, uid))
+            is_shortlisted_next = bool(sl_chk)
+
         return jsonify({
             'success': True,
             'level': current_state['level'] if current_state else 1,
@@ -832,7 +849,9 @@ def get_participant_state():
             'rounds_map': rounds_map,
             'countdown': countdown_data,
             'is_eliminated': is_disqualified_state,
-            'disqualification_reason': disq_reason
+            'disqualification_reason': disq_reason,
+            'results_released': results_released,
+            'is_shortlisted_next': is_shortlisted_next
         })
     except Exception as e:
         import traceback
@@ -1030,8 +1049,25 @@ def get_shortlisted_participants(contest_id):
 @bp.route('/<contest_id>/notify-progression', methods=['POST'])
 @admin_required
 def notify_progression(contest_id):
+    # 1. Get Active Level or just rely on frontend passing it? 
+    # Logic: usually for the *currently active* level's results.
+    # Note: User requirements say "When Admin clicks Notify All in Selection section".
+    # We'll infer it from the global state or keep it simple.
+    
+    # Let's find global active level
+    q = "SELECT round_number FROM rounds WHERE contest_id=%s AND status='active' ORDER BY round_number DESC LIMIT 1"
+    res = db_manager.execute_query(q, (contest_id,))
+    active_level = res[0]['round_number'] if res else 1
+    
+    # 2. Persist "Results Released" State
+    key = f"contest_{contest_id}_level_{active_level}_released"
+    db_manager.execute_update(
+        "INSERT INTO admin_state (key_name, value) VALUES (%s, 'true') ON DUPLICATE KEY UPDATE value='true'",
+        (key,)
+    )
+
     from extensions import socketio
-    socketio.emit('contest:progression_update', {'contest_id': contest_id})
+    socketio.emit('contest:results_released', {'contest_id': contest_id, 'level': active_level})
     return jsonify({'success': True})
 
 @bp.route('/<contest_id>/advance-level', methods=['POST'])

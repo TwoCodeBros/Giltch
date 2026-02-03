@@ -67,9 +67,20 @@ def get_leaderboard():
                 'status': row['status']
             })
             
+    # Fetch Total Questions for this level
+    q_count_query = """
+        SELECT COUNT(*) as count 
+        FROM questions q
+        JOIN rounds r ON q.round_id = r.round_id
+        WHERE r.round_number = %s
+    """
+    total_q_res = db.execute_query(q_count_query, (level,))
+    total_questions = total_q_res[0]['count'] if total_q_res else 0
+
     return jsonify({
         "leaderboard": data,
         "level": level,
+        "total_questions": total_questions,
         "generated_at": datetime.datetime.utcnow().isoformat()
     })
 

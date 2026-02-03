@@ -33,11 +33,11 @@ def get_stats():
 def get_participants():
     # Fetch participants with detailed info
     query = """
-        SELECT u.user_id, u.username, u.full_name, u.email, u.college, u.department, u.status, COALESCE(SUM(s.score_awarded), 0) as score
+        SELECT u.user_id, u.username, u.full_name, u.email, u.phone, u.college, u.department, u.status, COALESCE(SUM(s.score_awarded), 0) as score
         FROM users u
         LEFT JOIN submissions s ON u.user_id = s.user_id
         WHERE u.role = 'participant'
-        GROUP BY u.user_id, u.username, u.full_name, u.email, u.college, u.department, u.status
+        GROUP BY u.user_id, u.username, u.full_name, u.email, u.phone, u.college, u.department, u.status
         ORDER BY score DESC
     """
     res = db_manager.execute_query(query)
@@ -103,19 +103,63 @@ def create_participant():
     try:
         # Check duplication
         chk = db_manager.execute_query("SELECT user_id FROM users WHERE username=%s", (username,))
+        
+        update_existing = data.get('update_existing', False)
+
         if chk:
+            if update_existing:
+                # Update existing user
+                update_cols = []
+                update_vals = []
+                if full_name:
+                    update_cols.append("full_name=%s")
+                    update_vals.append(full_name)
+                if data.get('college'):
+                    update_cols.append("college=%s")
+                    update_vals.append(data.get('college'))
+                if data.get('department'):
+                    update_cols.append("department=%s")
+                    update_vals.append(data.get('department'))
+                if data.get('phone'):
+                    update_cols.append("phone=%s")
+                    update_vals.append(data.get('phone'))
+                if data.get('email'):
+                    update_cols.append("email=%s")
+                    update_vals.append(data.get('email'))
+                
+                if update_cols:
+                    update_q = f"UPDATE users SET {', '.join(update_cols)} WHERE username=%s"
+                    update_vals.append(username)
+                    db_manager.execute_update(update_q, tuple(update_vals))
+                    return jsonify({'success': True, 'participant': new_user, 'status': 'updated'})
+                else:
+                    return jsonify({'success': True, 'participant': new_user, 'status': 'no_changes'})
+
             if manual_mode:
                 return jsonify({'error': 'System generated duplicate ID. Please try again.'}), 409
             else:
                 return jsonify({'error': f"Participant ID '{username}' already exists."}), 409
 
-        cols = ['username', 'email', 'password_hash', 'full_name', 'role', 'status', 'college', 'department']
-        vals = [new_user[c] for c in cols]
+        cols = ['username', 'email', 'password_hash', 'full_name', 'role', 'status', 'college', 'department', 'phone']
+        vals = [
+            new_user['username'], 
+            new_user['email'], 
+            new_user['password_hash'], 
+            new_user['full_name'], 
+            new_user['role'], 
+            new_user['status'], 
+            new_user['college'], 
+            new_user['department'],
+            new_user.get('phone')
+        ]
         placeholders = ', '.join(['%s'] * len(cols))
         col_str = ', '.join(cols)
         
         insert_q = f"INSERT INTO users ({col_str}) VALUES ({placeholders})"
-        db_manager.execute_update(insert_q, tuple(vals))
+        db_res = db_manager.execute_update(insert_q, tuple(vals))
+        
+        if not db_res:
+            return jsonify({'error': 'Database insert failed. See logs.'}), 500
         
         return jsonify({'success': True, 'participant': new_user})
         
@@ -198,6 +242,81 @@ def create_questions_bulk():
             errors.append(f"Title {q.get('title')}: {str(e)}")
         
     return jsonify({'success': True, 'count': count, 'errors': errors})
+
+@bp.route('/questions/<qid>', methods=['GET'])
+@admin_required
+def get_question(qid):
+    """Fetch a single question's details for editing"""
+    query = "SELECT * FROM questions WHERE question_id=%s"
+    res = db_manager.execute_query(query, (qid,))
+    
+    if not res:
+        return jsonify({'error': 'Question not found'}), 404
+    
+    q = res[0]
+    formatted = {
+        'id': q.get('question_id'),
+        'title': q.get('question_title'),
+        'description': q.get('question_description'),
+        'difficulty': q.get('difficulty_level'),
+        'expected_input': q.get('test_input'),
+        'expected_output': q.get('expected_output'),
+        'test_cases': q.get('test_cases'),
+        'buggy_code': q.get('buggy_code'),
+        'round_number': q.get('round_id'),
+        'round_id': q.get('round_id'),
+        'language': 'python'  # Default, could be extracted from boilerplate if available
+    }
+    
+    return jsonify({'question': formatted})
+
+@bp.route('/questions/<qid>', methods=['PUT'])
+@admin_required
+def update_question(qid):
+    """Update an existing question"""
+    data = request.get_json()
+    
+    # Build dynamic update query based on provided fields
+    fields = []
+    params = []
+    
+    if 'title' in data:
+        fields.append("question_title=%s")
+        params.append(data['title'])
+    
+    if 'expected_input' in data:
+        fields.append("test_input=%s")
+        params.append(data['expected_input'])
+    
+    if 'expected_output' in data:
+        fields.append("expected_output=%s")
+        params.append(data['expected_output'])
+    
+    if 'buggy_code' in data:
+        fields.append("buggy_code=%s")
+        params.append(data['buggy_code'])
+    
+    if 'round_number' in data:
+        # Need to get the round_id from round_number
+        round_query = "SELECT round_id FROM rounds WHERE round_number=%s LIMIT 1"
+        round_res = db_manager.execute_query(round_query, (data['round_number'],))
+        if round_res:
+            fields.append("round_id=%s")
+            params.append(round_res[0]['round_id'])
+    
+    if not fields:
+        return jsonify({'success': True, 'message': 'No fields to update'})
+    
+    # Add the question ID to the params
+    params.append(qid)
+    
+    # Execute update
+    query = f"UPDATE questions SET {', '.join(fields)} WHERE question_id=%s"
+    try:
+        db_manager.execute_update(query, tuple(params))
+        return jsonify({'success': True, 'message': 'Question updated successfully'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @bp.route('/questions/<qid>', methods=['DELETE'])
 @admin_required

@@ -1253,6 +1253,7 @@ const Admin = {
                     <table class="admin-table">
                         <thead>
                             <tr>
+                                <th>S.No</th>
                                 <th>ID</th>
                                 <th>Name</th>
                                 <th>College</th>
@@ -1262,8 +1263,9 @@ const Admin = {
                             </tr>
                         </thead>
                         <tbody>
-                            ${participants.length > 0 ? participants.map(p => `
+                            ${participants.length > 0 ? participants.map((p, idx) => `
                             <tr>
+                                <td>${idx + 1}</td>
                                 <td><span style="font-family:'Fira Code'; font-size:0.9em; font-weight:600;">${p.participant_id}</span></td>
                                 <td>
                                     <div style="font-weight:600;">${p.name}</div>
@@ -1278,7 +1280,7 @@ const Admin = {
                                     <button class="btn btn-secondary" onclick="Admin.deleteParticipant('${p.participant_id}')" style="color: red; border-color: red; padding: 2px 8px; font-size: 0.8em;">Delete</button>
                                 </td>
                             </tr>
-                            `).join('') : '<tr><td colspan="6" style="text-align:center; padding: 2rem; color:gray;">No participants yet. Import Excel or Add Manually.</td></tr>'}
+                            `).join('') : '<tr><td colspan="7" style="text-align:center; padding: 2rem; color:gray;">No participants yet. Import Excel or Add Manually.</td></tr>'}
                         </tbody>
                     </table>
                 </div>
@@ -1392,12 +1394,12 @@ const Admin = {
 
                 for (const row of jsonData) {
                     // Try to map various column name possibilities
-                    const pid = row['Participant ID'] || row['ID'] || row['id'] || row['User ID'];
-                    const name = row['Full Name'] || row['Name'] || row['Student Name'];
-                    const college = row['College'] || row['Institution'] || row['College Name'];
-                    const dept = row['Department'] || row['Dept'] || row['Branch'];
-                    const phone = row['Phone'] || row['Mobile'] || row['Contact'];
-                    const email = row['Email'] || row['Email Address'] || row['Mail'];
+                    const pid = row['Participant ID'] || row['ID'] || row['id'] || row['User ID'] || row['participant_id'];
+                    const name = row['Full Name'] || row['Name'] || row['Student Name'] || row['name'];
+                    const college = row['College'] || row['Institution'] || row['College Name'] || row['college'];
+                    const dept = row['Department'] || row['Dept'] || row['Branch'] || row['department'];
+                    const phone = row['Phone'] || row['Mobile'] || row['Contact'] || row['phone'];
+                    const email = row['Email'] || row['Email Address'] || row['Mail'] || row['email'];
 
                     if (pid && name) {
                         try {
@@ -1407,10 +1409,15 @@ const Admin = {
                                 college: college ? String(college).trim() : '',
                                 department: dept ? String(dept).trim() : '',
                                 phone: phone ? String(phone).trim() : '',
-                                email: email ? String(email).trim() : ''
+                                email: email ? String(email).trim() : '',
+                                update_existing: true
                             });
-                            if (res && res.success) successCount++;
-                            else failCount++;
+                            if (res && res.success) {
+                                successCount++;
+                            } else {
+                                console.warn(`Failed to add ${name}: ${res?.error || 'Unknown error'}`);
+                                failCount++;
+                            }
                         } catch (err) {
                             console.error("Failed to add", name, err);
                             failCount++;
@@ -1429,10 +1436,15 @@ const Admin = {
             } catch (err) {
                 console.error("Error parsing Excel:", err);
                 alert("Error parsing Excel file. Ensure columns: 'Participant ID', 'Full Name', 'College', 'Department'");
+            } finally {
+                input.value = '';
                 const btn = document.querySelector('.admin-header .btn-secondary');
                 if (btn) {
-                    btn.innerHTML = '<i class="fa-solid fa-file-excel"></i> Import Excel';
-                    btn.disabled = false;
+                    // Restore button text strictly if it was changed
+                    if (btn.innerHTML.includes('Processing')) {
+                        btn.innerHTML = '<i class="fa-solid fa-file-excel"></i> Import Excel';
+                        btn.disabled = false;
+                    }
                 }
             }
         };
@@ -1559,6 +1571,7 @@ const Admin = {
                     <table class="admin-table">
                         <thead>
                             <tr>
+                                <th>S.No</th>
                                 <th>Title</th>
                                 <th class="center">Level</th>
                                 <th>Expected Output</th>
@@ -1566,16 +1579,18 @@ const Admin = {
                             </tr>
                         </thead>
                         <tbody>
-                            ${questions.length > 0 ? questions.map(q => `
+                            ${questions.length > 0 ? questions.map((q, index) => `
                             <tr>
+                                <td>${index + 1}</td>
                                 <td>${q.title}</td>
                                 <td class="center"><span class="badge badge-gray">Level ${q.round_number || '?'}</span></td>
                                 <td><code style="font-size:0.8em">${q.expected_output ? q.expected_output.substring(0, 30) + '...' : ''}</code></td>
                                  <td>
+                                    <button class="btn btn-secondary" onclick="Admin.showEditQuestionModal('${q.id}')" style="margin-right: 0.5rem;">Edit</button>
                                     <button class="btn btn-secondary" onclick="Admin.deleteQuestion('${q.id}')" style="color: red; border-color: red;">Delete</button>
                                 </td>
                             </tr>
-                            `).join('') : '<tr><td colspan="4" style="text-align:center; padding: 2rem;">No questions added yet.</td></tr>'}
+                            `).join('') : '<tr><td colspan="5" style="text-align:center; padding: 2rem;">No questions added yet.</td></tr>'}
                         </tbody>
                     </table>
                  </div>
@@ -1702,9 +1717,137 @@ const Admin = {
         }
     },
 
+    async showEditQuestionModal(questionId) {
+        try {
+            // Fetch question data
+            const response = await API.request(`/admin/questions/${questionId}`);
+            const question = response.question;
+
+            // Create or get edit modal
+            let modal = document.getElementById('edit-q-modal');
+            if (!modal) {
+                const modalHtml = `
+                <div id="edit-q-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999; align-items:center; justify-content:center;">
+                    <div class="glass-card" style="background:white; padding:2rem; width:600px; color: black; max-height: 90vh; overflow-y: auto;">
+                        <h3 style="margin-bottom: 1rem;">Edit Question</h3>
+                        <input type="hidden" id="edit-q-id">
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display:block; margin-bottom: 0.5rem; font-weight: 600;">Question Title</label>
+                            <input type="text" id="edit-q-title" class="input" placeholder="e.g. Broken Fibonacci" style="width:100%;">
+                        </div>
+                        
+                        <div>
+                            <label style="display:block; margin-bottom: 0.5rem; font-weight: 600;">Level</label>
+                            <select id="edit-q-level" class="input" style="width:100%;">
+                                <option value="1">Level 1</option>
+                                <option value="2">Level 2</option>
+                                <option value="3">Level 3</option>
+                                <option value="4">Level 4</option>
+                                <option value="5">Level 5</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="display:block; margin-bottom: 0.5rem; font-weight: 600;">Language</label>
+                            <select id="edit-q-lang" class="input" style="width:100%;">
+                                <option value="python">Python</option>
+                                <option value="c">C</option>
+                                <option value="java">Java</option>
+                                <option value="javascript">JavaScript</option>
+                                <option value="cpp">C++</option>
+                            </select>
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                            <div>
+                                <label style="display:block; margin-bottom: 0.5rem; font-weight: 600;">Expected Input (Optional)</label>
+                                <textarea id="edit-q-input" class="input" placeholder="Inputs for the code..." style="width:100%; height: 80px; font-family: 'Fira Code', monospace;"></textarea>
+                            </div>
+                            <div>
+                                <label style="display:block; margin-bottom: 0.5rem; font-weight: 600;">Expected Output (Required)</label>
+                                <textarea id="edit-q-output" class="input" placeholder="Correct output..." style="width:100%; height: 80px; font-family: 'Fira Code', monospace;"></textarea>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display:block; margin-bottom: 0.5rem; font-weight: 600;">Buggy Code (This will appear in the participant's editor)</label>
+                            <textarea id="edit-q-buggy" class="input" placeholder="Paste the code with errors here..." style="width:100%; height: 150px; font-family: 'Fira Code', monospace;"></textarea>
+                        </div>
+
+                        <div style="display:flex; justify-content: flex-end; gap: 1rem; margin-top: 1rem;">
+                            <button class="btn btn-secondary" onclick="document.getElementById('edit-q-modal').style.display='none'">Cancel</button>
+                            <button class="btn btn-primary" onclick="Admin.submitEditQuestion()">Save Changes</button>
+                        </div>
+                    </div>
+                </div>
+                `;
+                document.body.insertAdjacentHTML('beforeend', modalHtml);
+                modal = document.getElementById('edit-q-modal');
+            }
+
+            // Populate fields with existing data
+            document.getElementById('edit-q-id').value = questionId;
+            document.getElementById('edit-q-title').value = question.title || '';
+            document.getElementById('edit-q-level').value = question.round_number || '1';
+            document.getElementById('edit-q-lang').value = question.language || 'python';
+            document.getElementById('edit-q-input').value = question.expected_input || '';
+            document.getElementById('edit-q-output').value = question.expected_output || '';
+            document.getElementById('edit-q-buggy').value = question.buggy_code || '';
+
+            // Show modal
+            modal.style.display = 'flex';
+        } catch (error) {
+            console.error('Error fetching question:', error);
+            alert('Failed to load question data: ' + error.message);
+        }
+    },
+
+    async submitEditQuestion() {
+        const questionId = document.getElementById('edit-q-id').value;
+        const title = document.getElementById('edit-q-title').value;
+        const level = document.getElementById('edit-q-level').value;
+        const language = document.getElementById('edit-q-lang').value;
+        const expInput = document.getElementById('edit-q-input').value;
+        const expOutput = document.getElementById('edit-q-output').value;
+        const buggyCode = document.getElementById('edit-q-buggy').value;
+
+        if (!title || !expOutput || !buggyCode) {
+            alert("Title, Expected Output and Buggy Code are required");
+            return;
+        }
+
+        try {
+            const res = await API.request(`/admin/questions/${questionId}`, 'PUT', {
+                title,
+                round_number: level,
+                language,
+                expected_input: expInput,
+                expected_output: expOutput,
+                buggy_code: buggyCode
+            });
+
+            if (res && res.success) {
+                document.getElementById('edit-q-modal').style.display = 'none';
+                this.loadQuestionsView();
+                this.showNotification("Question Updated Successfully", "success");
+            } else {
+                throw new Error(res && res.error ? res.error : "Unknown error");
+            }
+        } catch (e) {
+            alert("Failed to update question: " + e.message);
+        }
+    },
+
+
     async handleQuestionUpload(input) {
         const file = input.files[0];
         if (!file) return;
+
+        // Find the button adjacent to the input
+        const btn = input.nextElementSibling;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Processing...';
+        btn.disabled = true;
+
         const reader = new FileReader();
         reader.onload = async (e) => {
             try {
@@ -1749,6 +1892,12 @@ const Admin = {
                 alert("Error parsing Excel.");
             }
             input.value = '';
+
+            // Restore Button State
+            if (btn) {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
         };
         reader.readAsArrayBuffer(file);
     },

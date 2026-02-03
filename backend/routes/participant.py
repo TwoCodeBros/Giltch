@@ -88,22 +88,49 @@ def unlock_level_logic(data):
         else:
              return jsonify({'error': 'User not found'}), 404
              
-        # Upsert
-        db.execute_update(
-            "INSERT IGNORE INTO participant_level_stats (user_id, contest_id, level, status, start_time) VALUES (%s, %s, %s, %s, %s)",
-            (user_id, contest_id, level, 'IN_PROGRESS', datetime.datetime.utcnow().isoformat())
-        )
+        now_iso = datetime.datetime.utcnow().isoformat()
         
-        db.execute_update(
-            "UPDATE participant_level_stats SET status='IN_PROGRESS' WHERE user_id=%s AND contest_id=%s AND level=%s AND (status='NOT_STARTED' OR status IS NULL)",
-            (user_id, contest_id, level)
-        )
+        # Check Existing
+        check_q = "SELECT start_time, status FROM participant_level_stats WHERE user_id=%s AND contest_id=%s AND level=%s"
+        existing = db.execute_query(check_q, (user_id, contest_id, level))
+        
+        start_time = now_iso
+        
+        if existing and existing[0]['start_time']:
+            start_time = existing[0]['start_time']
+            if isinstance(start_time, datetime.datetime):
+                start_time = start_time.isoformat()
+            
+            # If status is NOT_STARTED but time exists (weird?), or we just need to ensure STATUS is IN_PROGRESS
+            if existing[0]['status'] == 'NOT_STARTED':
+                 db.execute_update(
+                    "UPDATE participant_level_stats SET status='IN_PROGRESS' WHERE user_id=%s AND contest_id=%s AND level=%s",
+                    (user_id, contest_id, level)
+                )
+        else:
+            # Insert New
+             db.execute_update(
+                "INSERT INTO participant_level_stats (user_id, contest_id, level, status, start_time) VALUES (%s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE status='IN_PROGRESS', start_time=VALUES(start_time)",
+                (user_id, contest_id, level, 'IN_PROGRESS', now_iso)
+            )
+        
+        # Fetch Duration
+        d_res = db.execute_query("SELECT time_limit_minutes FROM rounds WHERE contest_id=%s AND round_number=%s", (contest_id, level))
+        duration = 45
+        if d_res and d_res[0]['time_limit_minutes']:
+             duration = d_res[0]['time_limit_minutes']
         
         # Notify Admin
         socketio.emit('admin:stats_update', {'contest_id': contest_id})
         socketio.emit('participant:started_level', {'participant_id': participant_id, 'level': level, 'contest_id': contest_id})
         
-        return jsonify({'success': True, 'level': level, 'status': 'active'})
+        return jsonify({
+            'success': True, 
+            'level': level, 
+            'status': 'active',
+            'start_time': start_time,
+            'level_duration_minutes': duration
+        })
         
     except Exception as e:
         import traceback
