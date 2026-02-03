@@ -524,8 +524,15 @@
                         const selOverlay = document.getElementById('selected-overlay');
                         const unselOverlay = document.getElementById('unselected-overlay');
 
-                        // Show overlays only if user is NOT currently inside a level (IN_PROGRESS)
-                        if (this.userStatus !== 'IN_PROGRESS' && res.results_released) {
+                        // FIX: Get authoritative status of the current level
+                        const currentLvl = res.level || 1;
+                        const levelStatus = (res.rounds_map && res.rounds_map[currentLvl]) ? res.rounds_map[currentLvl] : 'pending';
+
+                        // Show overlays only if:
+                        // 1. User is NOT inside the level (IN_PROGRESS)
+                        // 2. Admin explicitly released results
+                        // 3. The level itself is COMPLETED (prevents premature showing during active level)
+                        if (this.userStatus !== 'IN_PROGRESS' && res.results_released && levelStatus === 'completed') {
                             if (res.is_shortlisted_next) {
                                 unselOverlay.style.display = 'none';
                                 selOverlay.style.display = 'flex';
